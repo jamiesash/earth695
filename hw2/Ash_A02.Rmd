@@ -1,0 +1,881 @@
+---
+title: "(Your surname)_A02"
+author: "(Your full name)"
+date: "due 2021-01-30"
+output: 
+  #html_document: 
+  bookdown::html_document2:  
+    self-contained: yes
+    theme: cerulean #paper #cosmo #journal #readable
+    toc: true
+    smooth_scroll: true
+    toc_depth: 3
+    toc_float: true
+    number_sections: true
+    fig_caption: yes
+    code_folding: hide
+    # bibliography: ["geothermal.bib", "r.bib"]
+    # csl: apa-5th-edition.csl
+    # link-citations: yes
+---  
+
+<style type="text/css">  
+/* Note: CSS uses C-style commenting. */
+h1.title{font-size:22px; text-align:center;}
+h4.author{font-size:16px; text-align:center;}
+h4.date{font-size:16px; text-align:center;}
+body{ /* Normal  */ font-size: 13px}
+td {  /* Table   */ font-size: 12px}
+h1 { /* Header 1 */ font-size: 16px}
+h2 { /* Header 2 */ font-size: 14px}
+h3 { /* Header 3 */ font-size: 12px}
+.math{ font-size: 10pt;}
+.hi{ /* hanging indents */ 
+    padding-left:22px; 
+    text-indent:-22px;
+}
+blockquote {  
+    padding: 10px 20px;
+    margin: 0 0 20px;
+    font-size: 12px;
+    border-left: 5px solid #eee;
+}
+code.r{ /* code */ 
+       font-size: 12px;
+}
+pre{/*preformatted text*/ 
+    font-size: 12px;
+}
+p.caption {/* figure captions */ 
+    font-size: 1.0em;
+    font-style: italic; 
+} 
+</style>
+
+```{r setup, echo=FALSE}
+rm(list=ls()) # clean up
+library(knitr)
+library(coda)
+library(MASS)
+gr <- (1+sqrt(5))/2 # golden ratio, for figures
+opts_chunk$set(comment="  ",
+               #echo=FALSE,
+               cache=c(TRUE, FALSE)[2], 
+               eval.after="fig.cap",
+               collapse=TRUE, 
+               dev="png",
+               fig.width=7.0,
+               out.width="95%",
+               fig.asp=0.9/gr,
+               fig.align="center"
+               )
+
+## Kruschke's utility functions (edited by NF for use in RMarkdown)
+#if (c(TRUE,FALSE)[1]) source("DBDA2E-utilities.R") 
+
+## handy function to color text
+colorize <- function(x, color) {
+  ## x is a string
+  ## example:`r colorize("The assignment", "red")`
+  if (knitr::is_latex_output()) {
+    sprintf("\\textcolor{%s}{%s}", color, x)
+  } else if (knitr::is_html_output()) {
+    sprintf("<span style='color: %s;'>%s</span>", color, x)
+  } else x
+}
+
+mypar <- # Convenience wrapper for par()
+## Values are from Bloomfield (2014) "Using R for Numerical Analysis
+## in Science and Engineering." See ?par for meanings.
+function(mgp=c(2,0.5,0), mar=c(4,4,1.5,1.5), bty="l", 
+         bg=gray(0.97), tcl=0.3, mex=0.8, ...) {
+  par(mgp=mgp, mar=mar, bty=bty, bg=bg, tcl=tcl, mex=mex, ...) 
+}
+```  
+
+\newcommand{\logit}{\mathrm{logit}}
+\newcommand{\expit}{\mathrm{expit}}
+
+## Reading {-} 
+You can do this entire assignment without reading H&H, but if you don't like my derivation of Bayes rule, read H&H Sections 5.1 and 5.2 (pp.81--85 in my printed copy.)    
+
+## This Assignment {-}  
+
+Next week is a short week, and there is a lot of important material here, so this assignment will be due `r colorize("January 30", "red")` instead of January 15. We do some work with samples (theme 2 of the course) and then return to theme 1, combining prior information with information from new data. Recall that a PDF is a "state of information", so combining information means combining PDFs. I will outline Cox's rules, because they provide an easy-to-remember formulation of probability that works very well for BDA. To illustrate the power of Bayes rule, quite apart from MCMC, we will code a **Bayesian classifier** and a **naive Bayesian classifier**.  
+
+There are five exercises in this assignment. Ex 1 requires just a bit of coding. Ex 2 & 3 are done for you. Ex 4 is a simplified version of Ex 3, and if you use the code in Ex 3 as a template, it should go smoothly. Ex 5 requires only thought.  
+
+## RMarkdown tips {-}  
+- Exercises don't need to be done sequentially. If you cannot get a chunk to run, put `eval=FALSE` in the chunk header so `knitr` will ignore it, then move on to other exercises.   
+- In making headings, if you put even one space in front of the #, the heading will not be properly typeset. That is a Pandoc feature, and it is deliberate, because it allows you to use the # in non-heading text.  
+
+# H&H Chapter 3  
+
+This chapter gives an excellent review of probability.^[Minor errors in Chapter 3 from the H&H errata sheet: Page 47, Figure 3.4.3: x-axis label should be z, not u, on both panels. Page 55: The corrected sentence (with equation 3.4.21 appearing first) should read “To modify equation 3.4.21 so that the parameter k represents dispersion (as in equation 3.4.20), substitute...”] Unfortunately, figure 3.2.1 (page 32 in my print edition) has an error not mentioned in the errata. I recommend you cross out the entire middle panel of that figure, and its subtitle. No matter how you draw them, it is impossible for events A and B to be independent. To see why, try to draw non-empty sets A and B such that $\Pr(A|B)=\Pr(A)$. Also, the exposition associated with this figure is unclear. To clarify it, imagine that S is a dart board. There is a PDF over this dart board which may or may not be uniform; it doesn’t matter. The important thing is that $\Pr(A)$ is the probability that the next dart you throw will land in the subset labelled A. The symbol A is thus being used to denote both a point set and an event, which is an _abuse of notation_. ^[Statistics notation is full of such abuses, so keep your guard up.]
+
+# Probabilities from samples  
+
+With reference to Fig. 3.2.1, suppose $N$ darts have already been thrown and that the $i^{\mathrm{th}}$ dart landed at location $x^{(i)}$; note that I'm abusing notation by using $x^{(i)}$ to stand for an actual 2D location $x^{(i)},y^{(i)}$.  
+
+The probability that the next dart will land in subset A is estimated by $\Pr(A) \approx N^{-1} \sum_i I(x^{(i)} \in A)$ where $I()$ is the indicator function introduced in the last assignment and the symbol $\in$ means "is in". We estimate other probabilities as follows. The symbol $\approx$ is used instead of $=$ to indicate that the right hand side is an estimate.  
+
+The probability that the next dart will land in $A\cap B$, the intersection of $A$ and $B$, is properly denoted by $\Pr(A\cap B)$ but commonly written $\Pr(A,B)$. It is estimated by:      
+
+$$
+\Pr(A, B) \approx N^{-1} \sum_i I(x^{(i)} \in A)\cdot I(x^{(i)} \in B)
+$$  
+
+The probability the next dart lands in A or B or both:  
+$$
+\Pr(A\cup B) = \Pr(A) + \Pr(B) -\Pr(A\cap B)\\
+$$ 
+The probability that the next dart is in A, given that it is in B:  
+$$
+\Pr(A|B) \approx \frac{\sum_i I(x^{(i)}\in A)\cdot I(x^{(i)}\in B)}
+{\sum_i I(x^{(i)}\in B)}
+$$  
+
+## Exercise 1. {-}  
+
+The following figure shows a dart board S with subsets A and B and the impacts of N=1,000 darts. The x-y locations of the darts are in the matrix `pts`. Leave this code chunk as it is and:  
+**(a)** Add a second chunk to estimate $\Pr(A)$, $\Pr(B)$, $\Pr(A,B)$ and $\Pr(A|B)$ Hint: Use the relational operator, `<` and the `sum()` function.  
+**(b)** Generate 1,000 bootstrap replicates of `pts` and use them to obtain 95% confidence intervals for the probability estimates. **Hints:** To get the row numbers of `pts` for a bootstrap replicate, use `sample.int(Npt, size = Npt, replace = TRUE, prob = NULL)`. To get the confidence intervals, use `quantile()`. Use `hist()` to make histograms of the replicates and indicate confidence intervals by vertical red lines---use `abline()`---on the histograms. Put the histograms side by side in the same figure.  
+
+```{r darts, cache=TRUE, fig.asp=0.7, out.width="85%", fig.cap="A dart board S with subsets A and B, showing the impacts of 1,000 darts. This figure replaces Figure 3.2.1 on page 32 of our text. I chose rectangular subsets in order to make the probability calculations a little easier. The PDF over the dart board is indicated by the colors, but you won't need it for your calculations; the samples are all you need."}
+library(fMultivar)
+op <- mypar(mar=c(3,3,2,2))
+x <- seq(from=-1, to=1, by=0.01)
+X <- grid2d(x)
+z <- dnorm2d(X$x, X$y, rho = 0.5)
+ZD <- list(x = x, y = x, z = matrix(z, ncol = length(x)))
+image(ZD, main="Dart board")
+text(0.5, -0.5, labels="S", cex=2)
+
+Npt <- 1000
+set.seed(234)
+pts <- rnorm2d(Npt, rho=0.5)
+myblue <- adjustcolor("blue", alpha.f=0.30)
+points(pts, pch=19, col=myblue, cex=1.0)
+
+rect(-0.7, -0.7, 0.0, 0.4, lwd=2)
+text(-0.4, -0.5, labels="A", cex=2)
+text(-0.7, -0.7, pos=1, labels="(-0.7,-0.7)", cex=1.2)
+text( 0.0,  0.4, pos=3, labels="(0.0, 0.4)" , cex=1.2)
+
+rect(-0.4, -0.1, 0.6, 0.7, lwd=2)
+text( 0.3,  0.25, labels="B", cex=2)
+text(-0.4, -0.1, pos=1, labels="(-0.4,-0.1)", cex=1.2)
+text( 0.6,  0.7, pos=3, labels="(0.6, 0.7)",  cex=1.2)
+```  
+
+
+## Solution to Ex 1. {-}  
+```{r Ex1a}
+test <- (pts[,2] > -0.7 & pts[,2] < 0.4 & #gets the y part of rectangle A.
+         pts[,1] > -0.7 & pts[,1] < 0.0 ) #gets the x part of rectangle A.
+pA <- (sum(test)/nrow(pts))*100
+
+test <- (pts[,2] > -0.1 & pts[,2] < 0.7 & #gets the y part of rectangle B.
+         pts[,1] > -0.4 & pts[,1] < 0.6 ) #gets the x part of rectangle B.
+pB <- (sum(test)/nrow(pts))*100
+
+test <- (pts[,2] > -0.7 & pts[,2] < 0.4 & #gets the y part of rectangle B.
+         pts[,1] > -0.7 & pts[,1] < 0.0 | #gets the x part of rectangle B. 
+         pts[,2] > -0.1 & pts[,2] < 0.7 & #gets the y part of rectangle A.
+         pts[,1] > -0.4 & pts[,1] < 0.6 ) #gets the x part of rectangle A.
+pAB <- (sum(test)/nrow(pts)) *100
+
+test <- (pts[,2] > -0.7 & pts[,2] < 0.4 & #gets the y part of rectangle B.
+         pts[,1] > -0.7 & pts[,1] < 0.0 & #gets the x part of rectangle B. 
+         pts[,2] > -0.1 & pts[,2] < 0.7 & #gets the y part of rectangle A.
+         pts[,1] > -0.4 & pts[,1] < 0.6 ) #gets the x part of rectangle A.
+pAlB <- (sum(test)/nrow(pts))*100
+
+pAlB <- (pAlB/pB)*100 
+```
+
+**(a)** The results are as follows:  
+$\Pr(A)=$ `r pA`%.  
+$\Pr(B)=$ `r pB`%.  
+$\Pr(A,B)=$ `r pAB`%.  
+$\Pr(A|B)=$ `r round(pAlB, 2)`%.  
+
+**(b)** Put a chunk here to bootstrap 1,000 replicates of `pts`, calculate the 95% confidence intervals and plot the histograms.  
+
+```{r Ex1b}
+
+pA <- rep(0, nrow(pts))
+pB <- rep(0, nrow(pts))
+pAB <- rep(0, nrow(pts))
+pAlB <- rep(0, nrow(pts))
+
+for (i in 1:1000){
+  pts_index <- sample(1:nrow(pts), 1000, replace = TRUE) #or do this 1000 samples with replacement
+  pts_boot <- pts[pts_index,]
+  
+  temp <- (pts_boot[,2] > -0.7 & pts_boot[,2] < 0.4 & #gets the y part of rectangle A.
+           pts_boot[,1] > -0.7 & pts_boot[,1] < 0.0 ) #gets the x part of rectangle A.
+  pA[i] <- (sum(temp)/nrow(pts_boot))*100
+  
+  temp <- (pts_boot[,2] > -0.1 & pts_boot[,2] < 0.7 & #gets the y part of rectangle B.
+           pts_boot[,1] > -0.4 & pts_boot[,1] < 0.6 ) #gets the x part of rectangle B.
+  pB[i] <- (sum(temp)/nrow(pts_boot))*100
+  
+  temp <- (pts_boot[,2] > -0.7 & pts_boot[,2] < 0.4 & #gets the y part of rectangle B.
+           pts_boot[,1] > -0.7 & pts_boot[,1] < 0.0 | #gets the x part of rectangle B. Added an or
+           pts_boot[,2] > -0.1 & pts_boot[,2] < 0.7 & #gets the y part of rectangle A.
+           pts_boot[,1] > -0.4 & pts_boot[,1] < 0.6 ) #gets the x part of rectangle A.
+  pAB[i] <- (sum(temp)/nrow(pts_boot))*100
+  #I should be able to use probability algebra to calculate using pA and pB
+  
+  temp <- (pts_boot[,2] > -0.7 & pts_boot[,2] < 0.4 & #gets the y part of rectangle B.
+           pts_boot[,1] > -0.7 & pts_boot[,1] < 0.0 & #gets the x part of rectangle B. Added an or
+           pts_boot[,2] > -0.1 & pts_boot[,2] < 0.7 & #gets the y part of rectangle A.
+           pts_boot[,1] > -0.4 & pts_boot[,1] < 0.6 ) #gets the x part of rectangle A.
+  pAlB[i] <- sum(temp)/nrow(pts_boot)*100
+  
+  pAlB[i] <- (pAlB[i]/pB[i])*100 
+}
+
+prob <- cbind(pA,pB,pAB,pAlB)
+quans <- apply(prob, FUN=quantile, MARGIN=2, probs=c(0.5,0.025,0.975))
+
+mypar(mfrow = c(2, 2))
+hist(pB, breaks=10, freq=FALSE, xlab = 'N')
+abline(v=quans[,2], col="blue",lwd=2)
+
+hist(pA, breaks=10, freq=FALSE, xlab = 'N') 
+abline(v=quans[,1], col="blue",lwd=2)
+
+hist(pAB, breaks=10, freq=FALSE, xlab = 'N') 
+abline(v=quans[,3], col="blue",lwd=2)
+
+hist(pAlB, breaks=10, freq=FALSE, xlab = 'N') 
+abline(v=quans[,4], col="blue",lwd=2)
+
+```
+
+# Cox's rules  
+There are four rules. The first two are primitive notions (i.e., things that we all intuitively understand and agree on), and the last two are elementary consequences of the first two; Bayes rule is one of them. Here I will use the notation $p(x)$ instead of $[x]$ for a PDF. 
+
+## **Sum rule**  
+Rule 1, the sum rule, is our first primitive notion:    
+$$
+1=\int\! dx\, p(x|\cdots)
+$$ 
+in which the $\cdots$ reminds us that it doesn't matter what we are conditioning on. A PDF must integrate to 1 and a probability function (PF) must sum to 1.  
+
+## **Product rule**  
+Rule 2, the product rule, is our 2nd primitive notion:    
+
+$$
+p(x,y|\cdots)=p(x|y,\cdots)\,p(y|\cdots)
+$$  
+You may find the product rule easier to remember when written as a definition of conditional probability: $p(x|y)=p(x,y)/p(y)$, but I find it easiest to remember in the form $p(x,y)=p(x|y)p(y)$ because the y's are next to each other on the right hand side. 
+
+When I forget what the product rule really really means, I draw a dart board figure like the one in our text on page 32, and write     
+
+$$\begin{align}
+&\frac{\#(A\cap B)}{\#(S)} 
+&=\ \ \    &\frac{\#(A\cap B)}{\#(B)} 
+&\frac{\#(B)}{\#(S)} \\
+&\Pr(A,B)\ \  
+&=\ \ \  &\Pr(A|B) 
+&\Pr(B)
+\end{align}$$  
+
+in which the notation $\#(B)$ means the number of samples in set $B$.  
+
+Equivalently I write it in as an equation in _probability elements,_  
+
+$$
+p(x,y) \Delta x \Delta y = p(x|y)\Delta x\cdot p(y)\Delta y
+$$  
+
+and think about narrow strips in the x-y plane, and their intersection in a tiny rectangle. The quantity $p(x,y) \Delta x \Delta y$ is the number of samples in the rectangle $\Delta x \Delta y$ divided by the total number of samples $N$. The quantity $p(x|y)\Delta x$ is the number of samples in the tiny rectangle divided by the number of samples in the horizontal strip of width $\Delta y$. The quantity $p(y)\Delta y$ is the number of samples in the horizontal strip of width $\Delta y$ divided by $N$. (Ask yourself: What are the sets $A$ and $B$ here? What are the events $A$ and $B$?)   
+
+## More product rule {-}    
+
+When you move one or more variables from the left to the right of the given symbol you simply multiply by a PDF containing those variables:  
+
+$$
+p(x,y,z|\cdots) = p(x|y,z,\cdots)\, p(y,z,\cdots)
+$$
+Remember that the product rule is an _equality_. You can use it to go from right to left as well as from left to right. For example, to construct any joint distribution $p(u,v,w)$, think about conditionals and then construct the joint as one of the following products (for readability I am omitting the conditioning $|\cdots$):  
+
+$$\begin{align}
+p(u,v,w) 
+&= p(u|v,w)\,p(v|w)\,p(w);\ \ \ \  &(1)\\
+&= p(u|v,w)\,p(w|v)\,p(v);\ \ \ \  &(2)\\
+&= p(v|u,w)\,p(u|w)\,p(w);\ \ \ \  &(3)\\
+&= p(v|u,w)\,p(w|u)\,p(u);\ \ \ \  &(4)\\
+&= p(w|u,v)\,p(u|v)\,p(v);\ \ \ \  &(5)\\
+&= p(w|u,v)\,p(v|u)\,p(u);\ \ \ \  &(6)\\
+\end{align}$$
+
+Then remember **independence**. For example, if $u$ is independent of $w$ then $p(u|v,w)$ simplifies to $p(u|v)$. 
+
+## **Marginalization**  
+Rule 3, marginalization, is the first consequence of rules 1 and 2:    
+$$
+p(y|\cdots) = \int \! p(x,y|\cdots) dx\
+$$  
+
+ 
+Here is the derivation of rule 3 from rules 1 and 2. For clarity I will omit the conditioning. The justifications are given to the right of each step.
+
+$$\begin{align}
+p(y) &=p(y)\ &\text{tautology} \\
+&= p(y)\cdot 1 &\text{multiplication by 1 changes nothing} \\
+&= p(y) \cdot \int\! dx\, p(x|y) &\text{the sum rule} \\
+&= \int\! dx\, p(x|y)\, p(y) &p(y)\text{ is independent of}\ x \\
+&= \int\! dx\, p(x,y) &\text{the product rule}
+\end{align}$$  
+
+## Total probability {-}  
+H&H Figure 3.2.2 and equation (3.2.14) (page 36 in my print version) refer to the so-called **`r colorize("law of total probability", "skyblue")`**, which is just an example of marginalization. For continuous $y$ the "law" is
+
+$$
+p(x)=\int\!\!dy\,p(x|y)\,p(y)
+$$
+If $x$ is a continous variable and $y$ is a categorical variable the law is  
+
+$$
+p(x)=\sum_y p(x|y)\,\Pr(y)
+$$  
+If we have two categorical variables, $A$ and $B$, say, and $B$ has possible values $B_1, B_2, \ldots, B_N$ the law becomes equation (3.2.13) (page 35 of my H&H print edition):  
+
+$$
+\Pr(A)=\sum_{n=1}^N \Pr(A|B_n)\,\Pr(B_n)
+$$
+
+## **Bayes rule**  
+Rule 4, Bayes rule, is the 2nd consequence of rules 1 and 2 above.  
+
+Here is the derivation of the four forms in which you will typically encounter Bayes rule. I will use the variables $\theta$ and $y$ instead of $x$ and $y$ because typically we use a Greek letter for parameters and $y$ for stochastic data variables. In general, both $\theta$ and $y$ are multidimensional. Later, when the abstract stochastic variable $y$ is replaced by specific real data $y$---notice the abuse of notation---the names of PDFs containing $y$ will change to help us avoid being misled.    
+
+$$\begin{align}
+p(\theta,y)&=p(\theta,y) &\text{tautology}\\
+p(\theta|y)\cdot p(y) &= p(y|\theta)\cdot p(\theta)
+&\text{product rule}\\
+p(\theta|y) &= \frac{p(y|\theta)\cdot p(\theta)}{p(y)}
+&\text{divide by } p(y) \text{ gives BR1} \\
+&= \frac{p(y|\theta)\cdot p(\theta)}{\int\! d\theta\, p(\theta,y)}
+&\text{marginalization} \\
+&= \frac{p(y|\theta)\cdot p(\theta)}{\int\! d\theta\, p(y|\theta)\cdot p(\theta)}
+&\text{product rule gives BR2} \\
+&\propto p(y|\theta)\cdot p(\theta) 
+&\text{setting y=data gives BR3}\\
+&\propto p(y,\theta) 
+&\text{product rule gives BR4}\\
+\end{align}$$  
+
+Let's revisit the second line of the derivation above and put names on the PDFs there:^[Sigh! Writing these LaTex equations sure makes me sentimental about the blackboard.]     
+
+$$
+\underset{\text{posterior}}{p(\theta|y)}
+\ \ \ \cdot 
+\underset{\text{prior predictive}}{p(y)} 
+= 
+\underset{\text{sampling distribution}}{p(y|\theta)} 
+\cdot \ \ \ \ 
+\underset{\text{prior}}{p(\theta)}
+$$  
+
+To make it clearer, let's write it in terms of probability elements:  
+
+$$
+p(\theta|y) \Delta \theta \cdot p(y) \Delta y 
+= 
+p(y|\theta) \Delta y \cdot p(\theta) \Delta \theta
+$$  
+
+## Prior distribution {-}  
+The Bayesian view is that $p(\theta)$ represents a state of information about the parameters of the system before we analyze our new data $y$.  
+
+## Sampling distribution {-}  
+
+The sampling distribution $p(y|\theta)$ has that name because of the traditional assumption---frequentist statistics was developed by statisticians, such as Ronald Fisher, who often worked on problems in agriculture---that experiments are repeatable, e.g., that one can grow as many irises as desired. Every data set is thus a sample, conditional on the parameters of interest. When you substitute the value of the actual data $y$ into the formula for $p(y|\theta)$ it ceases to be a PDF and becomes a function of $\theta$ called the _likelihood._ Notice the abuse of notation here: We use $p(y|\theta)$ to denote the PDF for a stochastic variable $y$ and we also use it to denote the function of the single variable $\theta$ that we get when we substitute the data $y$ into the expression for $p(y|\theta)$. This abuse of notation is standard because alternative notations are so cumbersome.    
+
+## Prior predictive {-}
+
+Why is $p(y)$ called the prior predictive? Because $p(y)=\int\! d\theta\, p(y|\theta)\, p(\theta)$ is the distribution of the data we would predict based only on our prior information $p(\theta)$. The prior predictive is sometimes referred to as the _marginal likelihood_. If you substitute the actual data into it you have a number called the _evidence._  Again, notice the abuse of notation here: We use $p(y)$ to denote the PDF for a stochastic variable $y$ and we also use it to denote the single number that we get when we substitute the actual data value into $p(y)$.  
+
+## Posterior {-}  
+
+The PDF $p(\theta |y)$ is called the posterior because it comes _after_ the information from new observations $y$ have been combined with the prior information $p(\theta)$.  
+
+# Bayes rule examples  
+
+## Normal data {-}  
+Suppose we have data $\{y^{(i)}\}_{i=1}^N$ from a normal distribution with unknown parameters $\mu$ and $\sigma$. Our prior is then $p(\mu,\sigma)$, and (assuming the $y^{(i)}$ are independent) our likelihood is the product $\Pi_i N(y^{(i)}|\mu,\sigma)$. Our posterior $p(\mu,\sigma|y^{(1)}, y^{(2)}, \ldots,y^{(N)})$ is the function of $\mu$ and $\sigma$ proportional to $p(\mu,\sigma)\Pi_i N(y^{(i)}|\mu,\sigma)$.   
+
+## Poisson data {-}  
+Suppose we have count data $y^{(i)} \sim \text{Poisson}(\lambda)$. Our prior is then $p(\lambda)$, our likelihood is $\Pi_i \text{Poisson}(y^{(i)}|\lambda)$, and our posterior $p(\lambda|y^{(1)}, y^{(2)}, \ldots,y^{(N)})$ is the function of $\lambda$ proportional to $p(\lambda)\,\Pi_i \text{Poisson}(y^{(i)}|\lambda)$.  
+
+## Regression {-}  
+Suppose we have x-y data, with normal errors in the y's, error-free x's, and a process model $y=\beta_0 + \beta_1 x$. Our prior is then $p(\beta_0, \beta_1, \sigma)$. Our likelihood is $\Pi_i N(y^{(i)}|\beta_0+\beta_1 x^{(i)},\sigma)$, and our posterior (the LHS of Bayes rule) is  
+
+$$
+p(\beta_0,\beta_1, \sigma\, |y^{(1)}, y^{(2)}, \ldots,y^{(N)},x^{(1)}, x^{(2)}, \ldots,x^{(N)}).
+$$  
+This LHS is proportional to the RHS, given by
+
+$$
+p(\beta_0, \beta_1, \sigma)\, \Pi_i N(y^{(i)}|\beta_0+\beta_1 x^{(i)},\sigma).
+$$  
+Contrary to H&H (Box 6.2.2, page 121 in my paper copy), the predictors $x^{(1)}, x^{(2)}, \ldots,x^{(N)}$ **_should_** appear in the posterior because it is conditional on their values. Generally speaking, anything that appears on one side of Bayes rule should also appear on the other. The DAGS in Box 6.2.2 (bottom of page 122 in my paper copy) are correct.  
+
+## Insights from regression {-}  
+
+The above regression example looks different from the Normal and Poisson examples because the deterministic process model---H&H usually refer to it as $g(\,)$---is buried inside the observational model. To see what is going on here, recall the simple BUGS regression model from the last assignment. Let's call it model 1, omitting the priors for brevity:  
+
+     /* model 1*/
+     for (i in 1:N) {
+       y[i] ~ dnorm(a + b*x[i], 1/sigma^2)
+     }
+
+We rewrite this in a slightly different way as model 2, with the same priors:  
+
+     /* model 2*/
+     for (i in 1:N) {
+       mu[i] <- a + b*x[i]
+       y[i] ~ dnorm(mu[i], 1/sigma^2)
+     }
+
+The numerical results for $a$, $b$ and $\sigma$ will be the same for both BUGS models, but in model 1 the process and observation models are combined whereas in model 2 the process model is explicitly deterministic and the observation model is explicitly stochastic. Let's write out the Bayes rule equation for BUGS model 2, then manipulate it into the Bayes rule equation for BUGS model 1.  
+
+We begin, as usual, with a tautology for the joint PDF. To save writing I will denote $[x^{(1)}, x^{(2)},\ldots, x^{(N)}]$ by bold-face $\pmb{x}$ and similarly for $y$ and $\mu$. We proceed one step at a time using the product rule and independence:     
+
+$$\begin{align}
+\newcommand{\bx}{\pmb{x}}
+\newcommand{\by}{\pmb{y}}
+\newcommand{\bmu}{\pmb{\mu}}
+p(a,b,\sigma,\bx,\by,\bmu) 
+&= p(a,b,\sigma,\bx,\by,\bmu) 
+&\text{tautology}\\
+p(a,b,\sigma,\bmu|\bx,\by) p(\bx,\by) 
+&= p(\by | a,b,\sigma,\bmu,\bx)\, p(a,b,\sigma,\bmu,\bx) 
+&\text{prod. rule}\\
+p(a,b,\sigma,\bmu|\bx,\by) p(\by |\bx)\,p(\bx) 
+&= p(\by | a,b,\sigma,\bmu,\bx)\, p(a,b,\sigma,\bmu,\bx) 
+&\text{prod. rule}\\
+&= p(\by | \bmu,\sigma)\, p(a,b,\sigma,\bmu,\bx) 
+&\text{independence}\\
+&= p(\by | \bmu,\sigma)\, p(\bmu | a,b,\sigma,\bx)\,p(a,b,\sigma,\bx)
+&\text{prod. rule}\\
+&= p(\by | \bmu,\sigma)\, p(\bmu | a,b,\bx)\,p(a,b,\sigma,\bx)
+&\text{independence}\\
+&= p(\by | \bmu,\sigma)\, \delta(\bmu-a-b\bx)\,p(a,b,\sigma,\bx)
+&\bmu=a+b\bx\\
+&= p(\by | \bmu,\sigma)\, \delta(\bmu-a-b\bx)\,p(a,b,\sigma|\bx)\,p(\bx)
+&\text{prod. rule}\\
+&= p(\by | \bmu,\sigma)\, \delta(\bmu-a-b\bx)\,p(a,b,\sigma)\,p(\bx)
+&\text{independence}\\
+p(a,b,\sigma,\bmu|\bx,\by) p(\by |\bx)
+&= p(\by | \bmu,\sigma)\, \delta(\bmu-a-b\bx)\,p(a,b,\sigma)
+&\text{divide by }p(\bx)\\
+p(a,b,\sigma,\bmu|\bx,\by)
+&\propto p(\by | \bmu,\sigma)\, \delta(\bmu-a-b\bx)\,p(a,b,\sigma)
+&\text{divide by }p(\by|\bx)\\
+\end{align}$$  
+
+The last line of the above equation is our BUGS model 2. On the right hand side we have the product of a noisy observation model $p(\by | \bmu,\sigma)$, a deterministic process model $\delta(\bmu-a+b\bx)$ and the usual prior $p(a,b,\sigma)$, which by independence becomes $p(a)\,p(b)\,p(\sigma)$.  
+
+To get BUGS model 1 from BUGS model 2, we integrate model 2 over $\bmu$, using marginalization on the left hand side and the sifting property of $\delta(\,)$ on the right hand side; the result is:  
+
+$$
+p(a,b,\sigma|\bx,\by)
+\propto p(\by | a+b\bx,\sigma)\, p(a,b,\sigma).  
+$$  
+
+To summarize, regression of data containing additive noise can be viewed as a noisy process model, or as a deterministic process model + a noisy observation model. On a practical note, if your observation and process models are both noisy you are likely to find that the parameters of the two noise processes trade off against each other. In theory, low resolution of noise parameters isn't necessarily bad---you may not care about the noise parameters of your model if the other parameters are well resolved---but it may cause numerical inefficiencies, and may trouble reviewers of your papers. To avoid this situation use your prior knowledge of the two noise processes to either (1) completely specify one of them, or (2, looking ahead here) create informative priors for both. Strategy (1) is what H&H do in their analysis of the wildebeest data (Section 8.5, page 201 of my print copy).  
+
+To clarify that last paragraph, here is a BUGS model for regression in which both the process model and the observation model have additive noise. Compare this model with model 2 above:  
+
+     /* model 3*/
+     for (i in 1:N) {
+       mu[i] ~ dnorm(a + b*x[i], 1/sigma_p^2)
+       y[i ] ~ dnorm(mu[i], 1/sigma_o^2)
+     }
+
+In order for this model to work you should specify either the process noise parameter `sigma_p`, or the observational noise parameter `sigma_o`, by treating it like data.    
+
+# The Bayesian classifier (BC)  
+
+The following material isn't in our text, but it quickly illustrates the tremendous power of Bayes rule, and who knows, you might want to use it some day.   
+
+According to Wikipedia, the Bayesian classifier is theoretically the best possible classifier, and, as we will see in a moment, it is easily derived from Bayes rule. No MCMC is needed for this important algorithm. To explore it, we simulate a data set with three categories and two features.^[You should **always** make simulated data, because if your procedure doesn't work on simulated data it for-sure won't work on real data. Moreover, careful tests with simulated data will impress reviewers of your papers, making them more inclined to recommend publication.] In the jargon of statistical learning we would say "covariates" or "predictors" but in the jargon of machine learning we would say "features". I will use "features" here.  
+
+# Simulate data (Ex.2) {-}  
+In this exercise we will simulate some training data for a classifier. I do it for you.  
+
+## Solution to Ex 2. {-}
+
+```{r BC1, cache=TRUE, fig.asp=1.0, out.width="80%", fig.cap="Simulated data for three categories with two interval-scale covariates/predictors. (The machine learning folks refer to covariates as _features_.) **(a)** The data. **(b)** Marginal density of _y_ from the data. **(c)** Marginal density of _x_ from the data. If the features are ratio scale quantities, turn them into interval scale quantities by taking their logarithms."}
+## simulate data 
+set.seed(321)
+## random sample sizes
+Pri <- c(1000, 1000, 1000)/3000
+sam <- sample(x=c(1,2,3), size=3000, replace=TRUE, prob=Pri)
+N1 <- sum(sam==1) # use gray in plots
+N2 <- sum(sam==2) # use red in plots
+N3 <- sum(sam==3) # use blue in plots
+cols <- c(gray(0.5), "red", "blue")
+## Covariance matrices
+Sigma1 <- matrix(10*c(1,  0.7,  0.7, 1), nrow=2) 
+Sigma2 <- matrix(20*c(1, -0.6, -0.6, 1), nrow=2) 
+Sigma3 <- matrix(15*c(1, -0.5, -0.5, 1), nrow=2) 
+## means
+mu1 <- c(18, 20)
+mu2 <- c(10, 19) 
+mu3 <- c(12, 12)
+## random samples
+xy1 <- mvrnorm(n = N1, mu=mu1, Sigma=Sigma1)
+xy2 <- mvrnorm(n = N2, mu=mu2, Sigma=Sigma2)
+xy3 <- mvrnorm(n = N3, mu=mu3, Sigma=Sigma3)
+xy <- rbind(xy1, xy2, xy3)
+## plot samples
+op <- mypar(mfrow=c(2,2))
+lims <- apply(xy, FUN=range, MARGIN=2)
+plot(  xy1[,1], xy1[,2], pch="1", cex=0.5, col=cols[1], main="(a)", 
+       xlim=lims[,1], ylim=lims[,2], panel.first=grid(),
+       xlab="feature x", ylab="feature y")
+points(xy2[,1], xy2[,2], pch="2", cex=0.5, col=cols[2]  )
+points(xy3[,1], xy3[,2], pch="3", cex=0.5, col=cols[3] )
+## marginals
+tmp <- density(xy[,2])
+plot(tmp$y, tmp$x, type="l", ylim=lims[,2], xlab="Density", 
+     ylab="feature y", main="(b)")
+plot(density(xy[,1]), xlab="feature x", main="(c)")
+```  
+
+# Derive the BC {-}   
+Here we derive the Bayesian classifier using Bayes rule. As usual, we begin with a tautology and turn the crank:  
+
+$$\begin{align}
+p(i,x,y) 
+&= p(i,x,y) &\text{tautology}\\
+\Pr(i|x,y)\,p(x,y) 
+&= p(x,y|i)\,\Pr(i) &\text{product rule}\\
+\Pr(i|x,y) &= \frac{p(x,y|i)\,\Pr(i)}{p(x,y)} 
+&\text{divide by }p(x,y)\\
+&\propto p(x,y|i)\,\Pr(i)
+&p(x,y)\text{ is constant}
+\end{align}$$  
+
+For a given data point $x,y$ the Bayesian classifier picks the category for which the posterior probability is largest:
+
+$$\begin{align}
+\hat{i}(x,y) &= \underset{i}{\text{argmax}}\,\Pr(i|x,y) 
+&\text{the BC algorithm}\\
+&=\underset{i}{\text{argmax}} \left[ p(x,y|i)\,\Pr(i) \right]
+&\text{Bayes rule}\\
+&=\underset{i}{\text{argmax}} \left[\log p(x,y|i)+\log\Pr(i)\right]
+&\text{log() is monotonic}
+\end{align}$$  
+
+The last line of this formula is the preferred form for coding because the typical PDF function, such as `dnorm()` first calculates the logarithm of the PDF value $\log p(x)$, say, and returns that if the `log` argument of the function is `TRUE`. If the `log` argument is `FALSE` it exponentiates $\log p(x)$ to get $p(x)$ and returns that. By using the last line of the BC formula and setting `log=TRUE` in the PDF calls, one can save a lot of computation. Just remember that the default value of the `log` argument is almost always `FALSE`; if you want the logarithm of the PDF, you must include `log=TRUE` in the call.
+
+To apply the Bayesian classifier, we use the training data to estimate the three sampling distributions $p(x,y|i)$ and the prior $\Pr(i)$. In other words, we use the simulated data above as our _training set_. Later we will simulate more data for a _validation set_.  
+
+# Test the BC (Ex. 3) {-}  
+
+After making up this exercise, I realized that it is unfairly long, so I do it for you here.    
+
+## Solution to Ex 3. {-}  
+
+In the following chunk we generate the estimates for $p(x,y|i)$ and $\Pr(i)$. I will add "t" to variable names associated with quantities estimated from the training data. We are not supposed to know that the data were generated with bivariate normals, but the plot of the data points suggests that bivariate normals are a good guess, so it is reasonable to choose them for our analysis.  
+
+```{r BC2a, cache=TRUE}
+## estimate means
+mu1_t <- apply(xy1, FUN=mean, MARGIN=2)
+mu2_t <- apply(xy2, FUN=mean, MARGIN=2)
+mu3_t <- apply(xy3, FUN=mean, MARGIN=2)
+## estimate covariance matrices
+cov1_t <- cov(xy1)
+cov2_t <- cov(xy2)
+cov3_t <- cov(xy3)
+## calculate inverses once to save time
+invCov1_t <- inv(cov1_t)
+invCov2_t <- inv(cov2_t)
+invCov3_t <- inv(cov3_t)
+## estimate conditional functions p(x,y|i)
+## first make a generic p(x,y|i)
+pxy_t <- function(xy, mu, invCov, log=TRUE) {
+  xyr <- t(xy - mu)  # row vector
+  xyc <- t(xyr)      # col vector
+  logpxy <- -log(2*pi) + 0.5*log(det(invCov)) -
+             0.5 * xyr %*% invCov %*% xyc
+  if (log) logpxy else exp(logpxy) 
+}
+## make individual p(x,y|i) from the generic p(x,y|i)
+pxy1_t <- function(xy, log=TRUE)
+  pxy_t(xy, mu=mu1_t, invCov=invCov1_t, log=log) 
+pxy2_t <- function(xy, log=TRUE)
+  pxy_t(xy, mu=mu2_t, invCov=invCov2_t, log=log)
+pxy3_t <- function(xy, log=TRUE)
+  pxy_t(xy, mu=mu3_t, invCov=invCov3_t, log=log)
+## estimate priors
+Pr1_t <- N1/(N1 + N2 + N3)
+Pr2_t <- N2/(N1 + N2 + N3)
+Pr3_t <- N3/(N1 + N2 + N3)
+```   
+
+In this next chunk we check the estimated $p(x,y|i)$ by contouring them above the points in the training set. (In any data analysis, most coding is done to check things.)  
+
+```{r BC2b, cache=TRUE, fig.asp=0.33, fig.cap="Checking the functions p(x,y|i) estimated from the training data. "}
+## plot contours of the p(x,y|i) on training set points
+op <- mypar(mfcol=c(1,3))
+# points in category 1
+plot(xy1[,1], xy1[,2], pch="1", cex=0.5, col=cols[1], main="Group 1", 
+     xlim=lims[,1], ylim=lims[,2], panel.first=grid(),
+     xlab="feature x", ylab="feature y")
+xx <- seq(lims[1,1], lims[2,1], length.out=101)
+yy <- seq(lims[1,2], lims[2,2], length.out=101)
+Z1 <- matrix(0, nrow=101, ncol=101) # storage
+for (ix in 1:length(xx)) {
+  for (jy in 1:length(yy)) {
+    Z1[ix,jy] <- pxy1_t(c(xx[ix], yy[jy]), log=FALSE)
+  }
+}
+contour(xx, yy, Z1, lwd=0.5, nlev=10, add=TRUE )
+
+## points in category 2
+plot(xy2[,1], xy2[,2], pch="1", cex=0.5, col=cols[2], main="Group 2", 
+     xlim=lims[,1], ylim=lims[,2], panel.first=grid(),
+     xlab="feature x", ylab="feature y")
+Z2 <- matrix(0, nrow=101, ncol=101) # storage
+for (ix in 1:length(xx)) {
+  for (jy in 1:length(yy)) {
+    Z2[ix,jy] <- pxy2_t(c(xx[ix], yy[jy]), log=FALSE)
+  }
+}
+contour(xx, yy, Z2, lwd=0.5, nlev=10, add=TRUE )
+
+## points in category 3
+plot(xy3[,1], xy3[,2], pch="1", cex=0.5, col=cols[3], main="Group 3", 
+     xlim=lims[,1], ylim=lims[,2], panel.first=grid(),
+     xlab="feature x", ylab="feature y")
+Z3 <- matrix(0, nrow=101, ncol=101) # storage
+for (ix in 1:length(xx)) {
+  for (jy in 1:length(yy)) {
+    Z3[ix,jy] <- pxy3_t(c(xx[ix], yy[jy]), log=FALSE)
+  }
+}
+contour(xx, yy, Z3, lwd=0.5, nlev=10, add=TRUE )
+```  
+
+## Validation data {-}
+
+In the next chunk we create a validation dataset the same way we created the training dataset^[If I'd been thinking ahead, I'd have created one large simulated data set then randomly assigned the data points to training and validation subsets. Oh well.] and plot it as a visual check on our work.  
+
+```{r BC3, cache=TRUE, fig.asp=1.0, out.width="80%", fig.cap="A validation data set containing 1,000 points."}
+N_v <- 1000L
+sam_v <- sample(x=c(1,2,3), size=N_v, replace=TRUE, prob=Pri)
+N1_v <- sum(sam_v==1) 
+N2_v <- sum(sam_v==2) 
+N3_v <- sum(sam_v==3) 
+xy1_v <- mvrnorm(n = N1_v, mu=mu1, Sigma=Sigma1)
+xy2_v <- mvrnorm(n = N2_v, mu=mu2, Sigma=Sigma2)
+xy3_v <- mvrnorm(n = N3_v, mu=mu3, Sigma=Sigma3)
+xy_v <- rbind(xy1_v, xy2_v, xy3_v)
+## plot validation set
+op <- mypar(mfrow=c(2,2))
+plot(  xy1_v[,1], xy1_v[,2], pch="1", cex=0.5, col=cols[1], main="(a)", 
+       xlim=lims[,1], ylim=lims[,2], panel.first=grid(),
+       xlab="feature x", ylab="feature y")
+points(xy2_v[,1], xy2_v[,2], pch="2", cex=0.5, col=cols[2]  )
+points(xy3_v[,1], xy3_v[,2], pch="3", cex=0.5, col=cols[3] )
+## marginals for plots
+tmp <- density(xy_v[,2])
+plot(tmp$y, tmp$x, type="l", ylim=lims[,2], xlab="Density", 
+     ylab="feature y", main="(b)")
+plot(density(xy_v[,1]), xlab="feature x", main="(c)")
+```  
+
+## Run the BC {-}  
+
+Before running our BC, let's think for a moment of what elementary classifier strategies we might want to compare it with.    
+
+Suppose we use only the estimated priors to classify samples. From the training data we know that groups 1, 2, and 3 make up respectively fractions $\Pr(1)$, $\Pr(2)$ and $\Pr(3)$ of the population. An obvious strategy is therefore to classify each validation set sample as group 1 with probability $\Pr(1)$, group 2 with probability $\Pr(2)$ and group 3 with probability $\Pr(3)$. The probability of a successful classification is therefore $\sum_i\Pr(i)^2$, which in the present case is `r round(100*(Pr1_t^2 + Pr2_t^2 + Pr3_t^2))`%.  
+
+Another obvious strategy is to classify each sample as the group with the largest prior, group 1, say. Classifying every sample as group 1 will be correct $\Pr(1)$ of the time, so our success rate for this strategy will be $\max_i\Pr(i)$, which in the present case is `r round(100*max(Pr1_t,Pr2_t,Pr3_t))`%.  
+
+In the next chunk we use our BC to classify each point in the validation dataset, then count the number of correct classifications, and calculate a success rate.^[Damn. This BC demonstration is turning out to be more work than I had guessed it would be. I wish our textbook came with exercises.]  
+
+```{r BC4, cache=TRUE}
+## vector to indicate true category
+truecat_v <- c(rep(1, N1_v), rep(2, N2_v), rep(3, N3_v))
+## classify using estimated p(x,y|i) and Pr(i)
+estcat_v <- integer(length=N_v)
+for (i in 1:N_v) {
+  estcat_v[i] <- which.max(c(
+    pxy1_t(xy_v[i,], log=TRUE) + log(Pr1_t), 
+    pxy2_t(xy_v[i,], log=TRUE) + log(Pr2_t), 
+    pxy3_t(xy_v[i,], log=TRUE) + log(Pr3_t)
+  ))
+}
+## How many points correctly categorized?
+right_v <- sum(estcat_v==truecat_v)
+wrong_v <- N_v - right_v
+success_rate <- right_v/(right_v + wrong_v)
+
+## The priors-only classifier
+pr_success_rate <- Pri[1]^2 + Pri[2]^2 +Pri[3]^2
+```  
+
+Evidently `r round(100*success_rate,1)`% of our validation data set was correctly classifed by our BC.^[The first time through, I coded the functions $p(x,y|i)$ incorrectly in an attempt to make them speedy. As Donald Knuth famously wrote in his book, _The Art of Computer Programming_, "premature optimization is the root of all evil (or at least most of it) in computer programming."] The BC success rate is certainly much better than both of the priors-only success rates: the added information from the features makes a huge difference.     
+
+# Naive Bayesian Classifier   
+The Naive Bayesian classifier (NBC) is much easier to code than the BC, and it works well, so well, in fact, that theoreticians were puzzled about it for quite some time. To see what it is, recall the second line of our BC formula given above, and make the approximation that the features $x$ and $y$ are independent: $p(x,y|i)\approx p(x|i)\,p(y|i)$.^[A glance at the plot of the training data shows that the features are obviously **not** independent; if they were, the major and minor axes of the elliptically shaped clouds of points would be aligned with the feature axes.] Substituting this approximation into the BC formula gives the NBC formula:    
+
+$$\begin{align}
+\hat{i}(x,y) &= \underset{i}{\text{argmax}} \left[ p(x,y|i)\,\Pr(i) \right]
+&\text{the BC}\\
+&\approx \underset{i}{\text{argmax}} \left[ p(x|i)\,p(y|i)\,\Pr(i) \right]
+&\text{the NBC}\\
+&=\underset{i}{\text{argmax}} 
+\left[\log p(x|i) + \log p(y|i) + \log\Pr(i)\right]
+&\text{log() is monotonic}
+\end{align}$$  
+
+# Test the NBC (Ex. 4) {-}  
+In this exercise you will code the NBC and compare its performance to that of the BC. The coding is much easier because you'll be working with univariate $p(x|i), p(y|i)$ instead of the multivariate $p(x,y|i)$.  
+
+## Solution to Ex. 4 {-}  
+Use the training and validation datasets created above, but calculate things like the priors (`Pr1_t, Pr2_t, Pr3_t`) from scratch so that your NBC code does not depend on the above BC code.
+
+```{r, cache=TRUE}
+## estimate means 
+mu1 <- apply(xy1, FUN=mean, MARGIN=2) #assuming x is column 1
+mu2 <- apply(xy2, FUN=mean, MARGIN=2)
+mu3 <- apply(xy3, FUN=mean, MARGIN=2)
+
+## estimate standard deviations.
+sd1 <- apply(xy1, FUN=sd, MARGIN=2) #assuming x is column 1
+sd2 <- apply(xy2, FUN=sd, MARGIN=2)
+sd3 <- apply(xy3, FUN=sd, MARGIN=2)
+
+## estimate priors. 
+Pr1_t <- N1/(N1 + N2 + N3)
+Pr2_t <- N2/(N1 + N2 + N3)
+Pr3_t <- N3/(N1 + N2 + N3)
+``` 
+
+*ANSWER:* In the following chunk I use the training data to estimate the $p(x|i)$ and $p(y|i)$. The histograms of $x|i$ and $y|i$ look roughly Normal, so I chose Normal distributions with mean and SD estimated from the samples. To check my work I plot the estimated the $p(x|i)$ and $p(y|i)$ over the histograms of the samples used to estimate them. In this chunk I also estimate the prior distributions $\Pr(i)$. For example $\Pr(1)$ is estimated by the number of training samples in group 1 divided by the total number of training samples. The estimated prior distributions are calculated the same as the BC and are the variables `Pr1_t, Pr2_t, Pr3_t` and are `(Pr1_t, Pr2_t, Pr3_t)` respectively. 
+
+**MY ANSWER:** I generated six histograms, one for each group of data, subset by the X's and Y's. I also generated two histigrams with all groups together subset by the X's and Y's but do not show it here. 
+
+```{r}
+xyz <- list(xy1_v, xy2_v, xy3_v)
+names <- c("Group 1", "Group 2", "Group 3")
+names2 <- c("X's", "Y's")
+
+mypar(mfrow=c(2,3))
+for (i in 1:length(xyz)) {
+  
+  df <- xyz[[i]]
+  
+  for (j in 1:ncol(df)){
+    
+    x <- df[,j]
+    
+    h    <- hist(x, breaks=20, 
+                 main=paste("Histogram of",  names2[j],"for", names[i]),
+                 xlab = names2[j])
+    xfit <- seq(min(x),max(x),length=40)
+    yfit <- dnorm(xfit,mean=mean(x),sd=sd(x))
+    yfit <- yfit*diff(h$mids[1:2])*length(x)
+    lines(xfit, yfit, col="blue", lwd=2) 
+  }
+}
+```
+
+*ANSWER:* In the following chunk I code the NBC formula and apply it to classify the validation data generated above. I calculate the success ratio as the number of points correctly classified divided by the total number of points in the validation data.    
+
+```{r, cache=TRUE}
+## vector to indicate true category
+truecat_v <- c(rep(1, N1_v), rep(2, N2_v), rep(3, N3_v)) #This is the secret answer of correct groups.
+
+## classify using estimated p(x,y|i) and Pr(i)
+estcat_v <- integer(length=N_v)
+
+for (i in 1:N_v) {
+  estcat_v[i] <- which.max(c(
+    log(dnorm(xy_v[i,1], sd = sd1[1], mean = mu1[1])) + log(dnorm(xy_v[i,2], sd = sd1[2], mean = mu1[2])) + log(Pr1_t),
+    log(dnorm(xy_v[i,1], sd = sd2[1], mean = mu2[1])) + log(dnorm(xy_v[i,2], sd = sd2[2], mean = mu2[2])) + log(Pr2_t),
+    log(dnorm(xy_v[i,1], sd = sd3[1], mean = mu3[1])) + log(dnorm(xy_v[i,2], sd = sd3[2], mean = mu3[2])) + log(Pr3_t) 
+  ))
+}
+
+## How many points correctly categorized?
+right_v <- sum(estcat_v==truecat_v)
+wrong_v <- N_v - right_v
+success_rate2 <- right_v/(right_v + wrong_v)
+
+## The priors-only classifier
+pr_success_rate <- Pri[1]^2 + Pri[2]^2 +Pri[3]^2
+``` 
+
+The success rate for my naive Bayesian classifier on the validation data is `r success_rate2*100`%, which is not much less than the `r success_rate*100`% success rate of the BC. 
+
+# Mixture distributions  
+H&H give a nice explanation of mixture distributions in Section 3.4.5 (page 68 in my paper copy). A mixture PDF is a sum $p(x)=\sum_i w_i\, p(x|i)$ in which the $N$ weights $w_i$ sum to 1, and $p(x|i)$ is the i^th^ component of the mixture. Notice that $p(x)$ has unit integral because integration is a _linear_ functional^[A functional is an operator that accepts a function and returns a number. Examples in R include `integrate()`, `optimize()`, `uniroot()`, and `apply()`. Functions such as `max()` and `min()` can be regarded as functionals that accept discretized functions, vectors in other words.]---it distributes over linear sums of functions:
+
+$$\begin{align}
+\int\!\!dx\,p(x) &= \int\!\!dx\,\sum_{i=1}^N w_i\, p(x|i) \\
+&=\sum_{i=1}^N w_i \int\!\!dx\,p(x|i) \\
+&=\sum_{i=1}^N w_i \\
+&=1
+\end{align}$$  
+
+To draw from a mixture distribution, draw an integer $i$ from the integers _1:N_ with probability $w_i$ (R's `sample.int()` is a good way to do that) then draw from $p(x|i)$.  
+
+# Mixture BC (Ex. 5) {-}  
+For this exercise you do not have to do any coding; you just have to think a bit.  
+
+In our example above, we could see from the plot that the distribution of features for each group was roughly bivariate normal, so the bivariate normal was a reasonable choice for each $p(x,y|i)$. Suppose the distribution of features for each group is irregular in shape. Explain how you would construct the $p(x,y|i)$ from the training data and a mixture of bivariate normals: **(a)** How many Normals would you choose? **(b)** What would you use for the mean of each normal? **(c)** What would you use for the standard deviations? **(d)** Inspired by [nearest neighbors classifiers](https://en.wikipedia.org/wiki/K-nearest_neighbors_algorithm) explain how you might speed up your code by adaptive choosing a small subset of the components in each $p(x,y|i)$. **(e)** Would it be fair to say that the Bayesian classifier provides a theoretical foundation for nearest neighbors classifiers?      
+
+## Solution to Ex. 5 {-}  
+
+**(a)** To construct the $p(x,y|i)$ from the training data and a mixture of bi-variate normal's, I would use a mixture distribution where the weights, $\sum w_i$ are the prior predictors for each group of the training data set, $Pr(1), Pr(2), Pr(3)$, and sum to one `Pr1_t + Pr2_t + Pr3_t =` `r Pr1_t + Pr2_t + Pr3_t`. I would choose three bi-variant normal's each representing one of the three groups of data. 
+
+$$ \sum \omega_i [z_i]= \omega_1 \cdot bivariant normal(z|u_1,\sigma_1) + \omega_2 \cdot bivariant normal(z|u_2,\sigma_2) + \omega_3 \cdot bivariant normal(z|u_3,\sigma_3) $$
+
+**(b)** The mean of each group would be estimated as the center of the group in x~y space. That would be the average x value and average y value for each group. 
+
+**(c)** At first, I would estimate the standard deviation of each group to be one half of the mean of that group, but could try different $\sigma$ values until a best match is found (one that maximizes the success rate).
+
+**(d)** To speed up the code, I would use a small, randomly pulled, subset of each component $p(x,y|i)$ to find an early estimate, or starting point, for the mean and standard deviation of each group to be used in the mixture model. 
+
+**(e)** Yes, I do believe that that Bayesian classifier provides a theoretical framework for the nearest neighbor classifiers. The nearest neighbor classifiers use similar mixture model's that are weighted by the distance of each point from it's 'nearest neighbors'. 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

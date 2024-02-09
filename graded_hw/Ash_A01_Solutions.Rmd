@@ -1,0 +1,614 @@
+---
+title: "Ash_A01"
+author: "Jamie Patrick Ash"
+date: "due 2021-01-016"
+output: 
+  #html_document: 
+  bookdown::html_document2:  
+    self-contained: yes
+    theme: cerulean #paper #cosmo #journal #readable
+    toc: true
+    smooth_scroll: true
+    toc_depth: 3
+    toc_float: true
+    number_sections: true
+    fig_caption: yes
+    code_folding: hide
+    # bibliography: ["geothermal.bib", "r.bib"]
+    # csl: apa-5th-edition.csl
+    # link-citations: yes
+---  
+
+<style type="text/css">  
+/* Note: CSS uses C-style commenting. */
+h1.title{font-size:22px; text-align:center;}
+h4.author{font-size:16px; text-align:center;}
+h4.date{font-size:16px; text-align:center;}
+body{ /* Normal  */ font-size: 13px}
+td {  /* Table   */ font-size: 12px}
+h1 { /* Header 1 */ font-size: 16px}
+h2 { /* Header 2 */ font-size: 14px}
+h3 { /* Header 3 */ font-size: 12px}
+.math{ font-size: 10pt;}
+.hi{ /* hanging indents */ 
+    padding-left:22px; 
+    text-indent:-22px;
+}
+blockquote {  
+    padding: 10px 20px;
+    margin: 0 0 20px;
+    font-size: 12px;
+    border-left: 5px solid #eee;
+}
+code.r{ /* code */ 
+       font-size: 12px;
+}
+pre{/*preformatted text*/ 
+    font-size: 12px;
+}
+p.caption {/* figure captions */ 
+    font-size: 1.0em;
+    font-style: italic; 
+} 
+</style>
+
+```{r setup, echo=FALSE}
+rm(list=ls()) # clean up
+library(knitr)
+library(ggplot2)
+#library(coda)
+gr <- (1+sqrt(5))/2 # golden ratio, for figures
+opts_chunk$set(comment="  ",
+               #echo=FALSE,
+               cache=c(TRUE, FALSE)[1], 
+               eval.after="fig.cap",
+               collapse=TRUE, 
+               dev="png",
+               fig.width=7.0,
+               out.width="95%",
+               fig.asp=0.9/gr,
+               fig.align="center"
+               )
+
+## Kruschke's utility functions (edited by NF for use in RMarkdown)
+#source("DBDA2E-utilities.R") # <------------ NB
+
+## handy function to color text
+colorize <- function(x, color) {
+  ## x is a string
+  ## example:`r colorize("The assignment", "red")`
+  if (knitr::is_latex_output()) {
+    sprintf("\\textcolor{%s}{%s}", color, x)
+  } else if (knitr::is_html_output()) {
+    sprintf("<span style='color: %s;'>%s</span>", color, x)
+  } else x
+}
+mypar <- # Convenience wrapper for par()
+## Values are from Bloomfield (2014) "Using R for Numerical Analysis
+## in Science and Engineering." See ?par for meanings.
+function(mgp=c(2,0.5,0), mar=c(4,4,1.5,1.5), bty="l", 
+         bg=gray(0.97), tcl=0.3, mex=0.8, ...) 
+  par(mgp=mgp, mar=mar, bty=bty, bg=bg, tcl=tcl, mex=mex, ...) 
+```  
+
+\newcommand{\logit}{\mathrm{logit}}
+\newcommand{\expit}{\mathrm{expit}}
+
+# Score/Comments {-}  
+90/100. Extra credit for creative extra work!  
+
+## Ex 1 {-}  
+Excellent work (better than mine). You get extra credit for this problem. You wrote "There is a `xtest*100` percent" which is close, but in order to get the actual number in your narrative you needed to put an "r" after the opening backtick.  Using `round()` to limit the number of digits after the decimal point is also good. See my solutions.    
+
+**(d)** Nice figure! 
+
+**(e)** I agree. When estimating from samples the outer quartiles will always be less accurate than the inner quartiles because the density of samples is much lower out there in the tails.  
+
+## Ex 2 {-}  
+Your work may be slightly more accurate than mine here, but the point was just to use the samples. See what I did in the solutions. If I had wanted more accuracy I would have generated more samples of `x` and thus more values of `f(x)`.    
+
+## Ex 3 {-}  
+Nice figure and good discussion. The main thing to note is that, even for large CoV, the lognormal has no probability mass near zero, whereas the gamma has a lot there. That could be important in some applications.  
+
+## Ex 4 {-}  
+**(a)**  Good but I would use points for `y1 <- expit(logit(x))` so it isn't occluded by the red `y2 <- x` line. See the solutions.  
+**(b)**  Your answer here doesn't make sense to me. I would just use `plot(f(x),  g(x)); abline(0, 1, col="red")`.  
+
+## Ex 5 {-}  
+This is regression with additive noise, so there is no Poisson distribution in the problem. See the solutions.  
+
+**(c)** Standardization will reduce the correlation between samples of $a$ and $b$ as well as the number of samples needed for given accuracy. Consider: If all your x-y values are way out there in the first quadrant, a change in slope will cause a change in intercept, but if you standardize, a change in slope leaves intercept unchanged or nearly so.  
+
+**(d)** Yes! Using a student-t instead of a normal will make any regression with additive noise more robust to outliers.  
+
+**(e)** Orthogonal polynomials are better. Their coefficients will be less correlated so fewer samples will be less computation will be required to estimate them. The effect is like standardization, and for similar mathematical reasons.  
+
+# Reading {-} 
+For this assignment the main reading is H&H Chapters 1 and 2. If you haven't used the gamma or lognormal distributions recently, see pages 58-59 of Chapter 3.  
+
+# Assignments {-}  
+Create a folder for assignments ERTH695, say. Save this file there, then drop it into RStudio and save a version with the name `(Your surname)_A01.Rmd` correcting the title and author entries above. Do your work there and email it to me as an attachment no later than midnight Saturday. I will try to critique it on Sunday and return it to you on Monday. If your work uses a package not already in the setup chunk, please put the appropriate `library()` call there.  
+
+# About this course {-} 
+
+Think of this course as having three themes:  
+
+1. **Combining prior information with information from new data**  
+In Bayesian data analysis (BDA) we regard a PDF as a state of information. Combining prior information with new information means combining PDFs. The more general term _distribution_ is often used instead of PDF. We will be using the generic terms joint distribution, marginal distribution, conditional distribution, as well as the specialized BDA terms prior distribution, sampling distribution, prior predictive distribution, posterior distribution, posterior predictive distribution, likelihood and evidence.   
+
+2. **Using samples as proxies for PDFs**  
+We interrogate PDF formulas by doing calculus. For example, we may ask: What is the probability that $x$ is greater than 5.3? The answer is $\int_5^\infty\!dx\, [x]$. As another example, we may ask: What is the expected value of $f(x)$? The answer is $\int_5^\infty\!dx\, [x] f(x)$. All such questions can be answered more easily using samples $x^{(i)} \sim [x]$. For example, the probability that $x$ is greater than 5 is $N^{-1}\sum_{i=1}^N I(x^{(i)}>5)$, in which $I(\,)$ is the indicator function discussed below. As another example, the expected value of $f(x)$ is $N^{-1}\sum_{i=1}^N f(x^{(i)})$. For most of the distributions of interest in research problems, there are no formulas, so the calculus method is not possible.   
+
+3. **Generating samples with MCMC**  
+The three main methods of Markov Chain Monte Carlo (MCMC) are Metropolis-Hastings (M-H), the Gibbs Sampler (GS), and (more recently) Hamiltonian Monte Carlo (HMC). In previous years of this course we coded MH and GS from scratch as homework exercises, but a one-semester course requires hard choices, and we won't be doing that this time. Instead, we will focus on learning [JAGS](https://en.wikipedia.org/wiki/Just_another_Gibbs_sampler). JAGS isn't as efficient as [Stan](https://en.wikipedia.org/wiki/Stan_(software)), so you may have to run it longer than Stan to get the samples you need, but JAGS has the advantage of being easier to use (in my experience) because you talk to it in the BUGS language, which is a natural language for statistics. The Stan language is less intuitive (a bit like C++), and Stan requires that all quantities of interest be differentiable, so you can imagine the contortions it undergoes in order to handle problems with count or categorical data. Nevertheless, feel free to use Stan instead of JAGS for the homeworks if you want to. The easiest way to run JAGS (again, this is only my inexpert opinion) is through the `runjags` package, and the easiest way to run Stan is through the `rstan` package. Feel free to do things other ways if you like.   
+
+
+# Notation  
+
+To indicate a generic PDF, H&H use the notation $\left[z|\mu, \sigma^2 \right]$ in which $\mu$ is the mean and $\sigma^2$ is the variance. It is better, I think, to use $\left[z|\mu, \sigma \right]$ in which $\mu$ is an unspecified _location parameter_ and $\sigma$ is an unspecified _scale parameter_. The natural location and scale parameters for the normal distribution happen to be the mean and standard distribution, but that is unusual. If you dislike the square bracket notation $[x]$, feel free to use $p(x)$ instead. I do that a lot.   
+
+Suppose you have a PDF $[x|\theta]$, and you want to indicate its value at $x=a$. You could write $[x=a|\theta]$, but I think most statisticians would be inclined to write $p_X(a|\theta)$ with the subscript $X$ or $x$ (upper case is more technically correct) to remind us we are talking about $p_X$ not $p_Y$. The subscript notation will be essential when we use conservation of probability to find the PDF of $y=f(x)$ from the PDF of $x$. I tend to use lower case $p$ for probability _density_ functions and upper case $P(\,)$ or $\Pr(\,)$ for probability functions.  
+
+All of the following statements mean exactly the same thing: (1) $x$ has a beta distribution with shape parameters $\alpha$ and $\beta$; (2) the PDF of $x$ is $\text{beta}(x|\alpha,\beta)$; (3) $x \sim \text{beta}(\alpha,\beta)$. Notice that in statement (3) we wrote $\text{beta}(\alpha,\beta)$ not $\text{beta}(x|\alpha,\beta)$ 
+
+A sample from a conditional distribution $p(x|y)$ is sometimes written $x|y$ to remind us of the condition. This would be most useful if we were comparing samples from $p(x|y_1)$ with samples from $p(x|y_2)$.     
+
+Notation for derivatives: If you are feeling lazy, write $\partial_x$ instead of $d/dx$. Technically speaking $\partial_x$ is the abbreviation for $\partial/\partial x$ not $d/dx$, but the former reduces to the latter for functions of a single variable, so no harm is done.  
+
+# Some math  
+We need very little math for this course, but the bits that we need will be used a lot:  
+
+## Logarithms {-}  
+Euler's number, written $e$, is approximately 2.71828. If $y=e^x$ then $x$ is said to the _natural logarithm_ of $y$. Mathematicians write this as $y=\ln x$ and statisticians tend to write it as $y=\log x$. If $y=10^x$ then $x$ is said to be the _log-base-ten_ of $y$. Mathematicians usually write this as $y=\log x$ or $y=\log_{10} x$, and statisticians usually write it as $y=\log_{10} x$, so be careful when you read. Base R has the functions `log()`, `log10()` and `exp()`.   
+
+## log() and exp() {-}  
+$\log(\,)$ and $\exp(\,)$ are inverse functions. That is $\log(\exp(x))=x$ and $\exp(\log(x))=x$. Remember that $\exp(x)\cdot\exp(y)=\exp(x+y)$ and $\log(xy)=\log x + \log y$.   
+
+## logit() and expit() {-}  
+H&H define the logit function (eqn. 2.3.6, page 23) but neglect to introduce it's inverse, the expit function. Here they are:  
+
+$$
+\logit(p) = \log\left(\frac{p}{1-p}\right);\ \ \ 
+\expit(x)=\frac{1}{1+\exp(-x)}
+$$  
+These functions are not supplied by R, but they are easy to write:    
+
+    logit <- function(p) log(p/(1 - p))
+    expit <- function(x) 1/(1 + exp(-x))  
+    
+The expit function is often referred to as the [standard logistic function](https://en.wikipedia.org/wiki/Logistic_function#standard_logistic_function). It is the cumulative distribution function (CDF) of the [standard logistic distribution](https://en.wikipedia.org/wiki/Logistic_distribution).   
+
+## Logarithmic derivative {-}  
+The logarithmic derivative of $f(x)$ gives the _fractional_ change in $f$ per unit change in $x$. It thus has the dimensions of $x^{-1}$. If you multiply the logarithmic derivative by 100, you have the percentage change in $f$ per unit change in $x$.  
+$$
+\frac{d}{dx}\log f = \frac{1}{f}\frac{df}{dx}.\ \ \ 
+\textrm{In particular,}\ \ 
+\frac{d}{dx}\log x = \frac{1}{x} 
+$$  
+
+If you want a "derivative" that is totally dimensionless (i.e., independent of the units of both $x$ and $f$) use $x\partial_x\log f$, which gives the fractional change in $f$ per unit of fractional change in $x$, i.e., the percentage change in $f$ per unit of percentage change in $x$. It is most useful when both $f$ and $x$ are ratio scale quantities such as mass, length, area, volume, duration, density and so forth.    
+
+
+## Derivative of a power {-}  
+$$
+\frac{d}{dx} x^k = k x^{k-1}
+$$  
+
+## Integral of a power {-} 
+$$
+\int_a^b \!\!dx\, x^k 
+= \left[ \frac{x^{k+1}}{k+1}\right]_a^b
+= \frac{1}{k+1}\left[b^{k+1}-a^{k+1} \right]
+$$
+
+## Reversal of limits {-} 
+$$
+\int_b^a \!\!dx\, f(x) 
+= - \int_a^b \!\!dx\, f(x)
+$$  
+
+## Meaning of a PDF {-} 
+If $[x|\cdots]$ is a probability density function (PDF) then $\int_a^b dx\, [x|\cdots]$ is the probability that $a\lt x \lt b$ given the conditions $\cdots$. Every time you use a PDF in your research you are conditioning on unstated assumptions ($\cdots$) too numerous to list. Try to think of what these are, even if you don't discuss them in your writing.  
+
+## Delta functions {-} 
+The special PDF with all its probability mass concentrated at a point $a$ is written $\delta(x-a)$. Not surprisingly, it has the _sifting property_ $f(a)=\int_a^b\! dx\,\delta(x-a)f(x)$ for any continuous function $f(x)$.  
+
+When delta functions were invented by the physicist Paul Dirac, mathematicians first gagged, and then decided to think of them as limits of well behaved PDFs. Thus $\delta(x-\mu)$ can be regarded as the limit of $N(x|\mu,\sigma)$ as $\sigma\rightarrow 0$.  
+
+## Indicator functions {-} 
+The indicator function $I(S)$ takes the value 1 if statement $S$ is true and 0 if $S$ is false. For example $I(a\lt x \lt b)$ has the value 1 if $x$ is between $a$ and $b$ and the value 0 otherwise; it is sometimes referred to as a "boxcar". The function $I(x\gt 0)$ is often referred to as the Heaviside step function (for the American electrical engineer Oliver Heaviside), or simply _step function_, and written $H(x)$. Thus $H(x-a)=I(x \gt a)$. H&H write the argument of the indicator function as a subscript, which makes it hard to read.  
+
+Notice that the delta function introduced above can be written as a limit of boxcar PDFs:   
+$$
+\delta(x-a) = \lim_{\epsilon\rightarrow 0} 
+\epsilon^{-1} I(a-\epsilon/2 \lt x \lt a+\epsilon/2).
+$$  
+## Ratio scale {-}  
+Roughly speaking, a quantity $r$ is said to be _ratio scale_ if it is inherently positive and $1/r$ is as meaningful as $r$. For example, frequency and its reciprocal, wavelength, are ratio scale quantities. So are population density, and its reciprocal, territory size. Volume, area, length, duration, speed, and density are ratio scale quantities. Odds-for and odds-against are ratio scale quantities. The quotient of two ratio scale values is always meaningful, and dimensionless: density1/density2, for example.     
+
+## Interval scale {-}  
+Roughly speaking, a quantity is said to be _interval scale_ if it can be positive or negative. Coordinates on a map are interval scale. It might not be obvious at this point, but the logarithm of a ratio scale quantity is an interval scale quantity. The difference of two interval scale values is always meaningful, but their ratio is seldom meaningful.   
+
+# H&H Chapter 1  
+
+This chapter is a good introduction to notation and vocabulary, but the theory there may seem mysterious until you have read later chapters.  
+
+## Process models  
+
+A _process model_ can be entirely deterministic---for example, the linear model $z = a + bx$; or stochastic---for example, the linear model with additive noise $z = a + bx + \epsilon$, with $\epsilon \sim N(\mu,\sigma)$. Be careful when putting noise into a process model, as it may be difficult to distinguish process noise from observational noise; run tests with _simulated data_ to examine whether the two noise parameters are _identifiable_ or trade-off against each other.  
+
+Does a deterministic process model have a PDF? Of course it does. For example, the PDF of the deterministic linear model is $[z|a,b,x]=\delta(z-a-bx)$. Moreover, contrary to what our texbook says in Chapter 6 (Box 6.2.2 on page 121), it is perfectly OK to condition explicitly on predictors such as $x$; just make sure they appear correctly as conditional variables on both sides of your full model equation.  
+
+## Ricker model  
+
+The footnote on page 12 of our text introduces the Ricker model $\partial_t \log(N) = r(1-N/K)$ in which $r$ is the intrinsic population growth rate and $K$ is the carrying capacity of the environment. The Ricker model is associated with _scramble competition_ in which all individuals compete for finite resources. The alternative is _contest competition_ in which a few individuals take all they need and others perish. 
+
+The discretized form of the Ricker model, introduced in Chapter 1 for the wildebeest data, is $\log N_t=\log N_{t-1} + r(1-N_{t-1}/K)\Delta t$, and taking the time step $\Delta t$ to be one year allows us to drop it from the equation. The question being asked of the data is To what extent do rainfall deviations $x_t$ affect the population growth rate and carrying capacity? To address this question the authors generalize the Ricker model to  
+
+$$\begin{align}
+\log N_t / N_{t-1}
+&= r[1+x_t\partial_x r] - 
+   (r/K)\left[1+x_t \partial_x(r/K)\right] N_{t-1} \\
+&= \beta_0 + \beta_1 x_t + \beta_2 N_{t-1} + \beta_3 x_t N_{t-1}
+\end{align}$$  
+
+Comparing the two forms of the model shows that $\beta_1 \approx r^{-1}\partial_x r$ and $\beta_3 \approx (r/K)^{-1} \partial_x (r/K)$. In other words, $\beta_1 \approx \partial_x \log r$ and $\beta_3 \approx \partial_x \log(r/K)$.  
+
+There are three possible ways to extend the model ($\beta_2$-only, $\beta_3$-only, $\beta_2$ and $\beta_3$). The $\beta_2$-only model and the $\beta_3$-only model aren't nested, so for model selection you would want to use one of the methods discussed in Section 9.1 of our text (page 210 in my paper copy).  
+
+A set of models is said to be nested (like Russian dolls) if each of the simpler models in the set can be obtained by setting parameters to zero in the most complex model of the set. For example, the regression models $y=a$, $y=a+bx$, $y=a+bx+cx^2$ are nested because you get the second model by setting $c=0$ in the third, and you get the first model by setting $b=0$ in the second.    
+
+# BUGS code    
+The BUGS language is a good way to describe a statistical model even if you don't plan to run it, so let's look ahead a little bit. On page 15, H&H give the very nice Figure 1.2.1 in which the upper panel is a _directed acyclic graph_ (DAG), and the lower panel shows Bayes rule for the wildebeest problem, with the various distributions in generic form. To make this more specific, let's choose a Poisson distribution for the sampling model, and a lognormal distribution for the process model. Remember that the deterministic part of the process model is the extended Ricker equation given above:  
+
+$$
+\log(N_t) = \log(N_{t-1}) + 
+  \beta_0 + \beta_1 N_{t-1} + \beta_2 x_t +\beta_3 N_{t-1} x_t
+$$  
+
+To simplify our BUGS code, we use the fact that if $N_t$ has a lognormal distribution then $\log N_t$ has a normal distribution. We therefore take $\log N_t$ as our data. Have a look at this code before reading the discussion below it. 
+
+    /* sampling model */
+    for (t in 1:tmax) {
+      N[t] <- exp(logN[t])
+      for (j in 1:jmax) {
+        y[t,j] ~ dpois(N[t]/a)
+      }
+    }
+    
+    /* process model */
+    for (t in 2:tmax) {
+      mu[t] <- logN[t-1] + b0 + b1*N[t-1] +b2*x[t] + b3*N[t-1]*x[t]
+      logN[t] ~ dnorm(mu[t], 1/sigma_p^2)
+    }
+    
+    /* priors */
+    b0 ~ dunif(-100, 100)
+    b1 ~ dunif(-100, 100)
+    b2 ~ dunif(-100, 100)
+    b3 ~ dunif(-100, 100)
+    sigma_p ~ dgamma(0.001, 0.001)
+    
+## About BUGS {-}
+- BUGS uses the tilde $\sim$ to indicate that the quantity on the left hand side is a draw from the distribution on the right hand side.  
+- Deterministic quantities are assigned using `<-`.  
+- I like to use C-style commenting `(/*...*/)`, although R-style commenting is supposed to work as well.  
+- BUGS is a _declarative language_ so the code above would work just as well if you reordered the sampling, processing and priors blocks.  
+- The statement `logN[t] ~ dnorm(mu[t], 1/sigma_p^2)` reflects the fact that BUGS parameterizes the normal distribution using _precision_ $1/\sigma^2$ instead of the variance or standard deviation.   
+- Statements such as `b0 ~ dunif(-100, 100)` reflect the fact that the uniform density is the uninformative density for an interval-scale quantity.  
+- The statement `sigma_p ~ dgamma(0.001, 0.001)` is one you will see a lot of because $\mathrm{gamma}(r|\alpha,\beta) \propto 1/r$ as $\alpha,\beta \rightarrow 0$, and the reciprocal density $p(r)\propto 1/r$ is the uninformative density for a ratio-scale quantity.      
+
+
+# Exercises  
+Please write the narrative parts of your answers (the narrative is the text outside of code chunks) in `r colorize("complete sentences", "red")` whenever possible.    
+
+## Ex 1. Working with samples {-} 
+The following chunk uses the r function `rlnorm()` to generate a vector of N=1000 samples from the lognormal distribution with mean and variance equal to 10. Make a second chunk to: **(a)** Use the samples to find the probability that the next sample $x$ will be greater than 20 and **(b)** Check your result with with calculus via the function `plnorm()`. In the narrative following the chunk: **(c)** Explain the lack of accuracy in the calculation that uses samples. **(d)** Very roughly, how big do you have to make N to get 1% accuracy in (a)? **(e)** When using samples to estimate percentiles, are the 2.5% and 97.5% percentiles more or less accurate than the 25% and 75% percentiles?  
+
+```{r Ex1a}
+## Write a moment-matching function 
+lognpars <- function(mn=1, sd=1) {
+  ## Moment matching for the lognormal distn
+  ## Formulas derived from H&H eqns (3.4.27-28, p58-59)
+  ## and checked on Wikipedia
+  c <- sd/mn
+  alpha <- log(mn/sqrt(1 + c^2)) # mean of log(x)
+  beta  <- sqrt(log(1 + c^2))    #  sd  of log(x)
+  list(alpha=alpha, beta=beta)   # returned value
+}
+
+Lpars <- lognpars(10, 10)
+## Get N samples
+set.seed(123)
+N <- 1000
+x <- rlnorm(n=N, meanlog=Lpars$alpha, sdlog=Lpars$beta)
+```
+
+## Solution to Ex 1 {-}   
+
+```{r Ex1abc}
+#EXCERSISE 1a) 
+lognpars <- function(mn=1, sd=1) {
+  ## Moment matching for the lognormal distn
+  ## Formulas derived from H&H eqns (3.4.27-28, p58-59)
+  ## and checked on Wikipedia
+  c <- sd/mn
+  alpha <- log(mn/sqrt(1 + c^2)) # mean of log(x)
+  beta  <- sqrt(log(1 + c^2))    #  sd  of log(x)
+  list(alpha=alpha, beta=beta)   # returned value
+}
+
+Lpars <- lognpars(10, 10)
+
+## Get N samples
+set.seed(123)
+N <- 1000
+x <- rlnorm(n=N, meanlog=Lpars$alpha, sdlog=Lpars$beta)
+
+h <- hist(x, breaks= 100, plot=FALSE);
+b <- cut(1, h$breaks);
+clr <- ifelse(h$breaks < 20, "white", "lightblue")[-length(h$breaks)]
+hist(x, col=clr, breaks=100, freq=FALSE, xlab = 'N') 
+lines(dlnorm(0:1000, meanlog = Lpars$alpha, sdlog = Lpars$beta, log = FALSE), col="red")
+
+#THIS WORKS!!! Calculates percent error. 
+xtrue <- 1 - plnorm(20, mean = Lpars$alpha, sd = Lpars$beta, log = FALSE)
+xtest <- sum(x>20)/length(x)
+
+perror <- abs(((xtest-xtrue)/xtrue)*100) #Answer to Question 1b compare integral to sum f samples. 
+```
+Answer Exercise 1a 1b and 1c: There is a `xtest*100` percent chance the next randomly generated value is greater than 20, because `xtest*100` percent of the randomly generated $x$ values are greater than $20$. Given plnorm function the area under the PDF that is greater than  $X=20$ is `xtrue`, meaning the true percent chance that the next randomly generated value is `xtrue*100` percent. This gives a percent error of `perror`.
+
+```{r Ex1d}
+################################################################################
+#EXCERSISE 1b) How many licks to the center of the lolly pop
+sequ = seq(20, 1000000, by = 2000)
+
+d <- sum(dlnorm(20:5000, mean = Lpars$alpha, sd = Lpars$beta, log = FALSE)) #Dependent on interval BLAH
+p <- 1 - plnorm(20, mean = Lpars$alpha, sd = Lpars$beta, log = FALSE)
+q <- qlnorm(p, mean = Lpars$alpha, sd = Lpars$beta, log = FALSE, lower.tail=FALSE)
+
+error <- rep(NA, length(sequ))
+error2 <- rep(NA, length(sequ))
+xtrue = p
+j <- 0
+
+for (i in sequ) {
+  j <- j + 1
+  N <- i
+  x <- rlnorm(n=N, meanlog=Lpars$alpha, sdlog=Lpars$beta)
+  
+  xtest <- sum(x>20)/length(x)
+  error[j] <- ((xtest-xtrue)/xtrue)*100
+}
+
+sensor1 <- data.frame(y=error, t=as.numeric(seq(1, length(error))))
+sensor2 <- data.frame(y=abs(error), t=as.numeric(seq(1, length(error2))))
+
+ggplot() + 
+  geom_point(aes(sequ, sensor1$y))+
+  ylim(-25,25)+
+  theme_classic()+
+  geom_hline(yintercept = 1, size=0.5, color="lightgrey")+
+  geom_hline(yintercept = -1, size=0.5, color="lightgrey")+
+  labs(x="Length of N", y="Percent Error (%)", title="How many licks")
+
+```
+
+Answer Exercise 1d: Looks like the percent error consistently falls below 1% around a $N = 250,000$ sample size. The gray lines are +1% and -1% error markers. 
+
+
+```{r Ex1e}
+#EXCESIZE 1c)  I need correct my tails it's wrong
+N <- 1000
+x <- rlnorm(n=N, meanlog=Lpars$alpha, sdlog=Lpars$beta)
+quant <- matrix(c(0.25, 0.75,0.025,0.98), nrow = 2)
+errors <- matrix(c(NA, NA, NA, NA), nrow = 2)
+
+for (i in 1:2) 
+  {
+  q25 <- qlnorm(quant[1, i], mean = Lpars$alpha, sd = Lpars$beta, log = FALSE, lower.tail=TRUE) #gives the number from area 
+  q75 <- qlnorm(quant[2 ,i], mean = Lpars$alpha, sd = Lpars$beta, log = FALSE, lower.tail=TRUE) #gives the number from area
+  
+  xtrue25 <- plnorm(q25, mean = Lpars$alpha, sd = Lpars$beta, log = FALSE, lower.tail=TRUE) #gives the area under the curve
+  xtrue75 <- plnorm(q75, mean = Lpars$alpha, sd = Lpars$beta, log = FALSE, lower.tail=FALSE) #gives the area under the curve
+  
+  xtest25 <- sum(x<q25)/length(x)
+  xtest75 <- sum(x>q75)/length(x)
+  
+  errors[i,1] <- abs((xtest25-xtrue25)/xtrue25)*100
+  errors[i,2] <- abs((xtest75-xtrue75)/xtrue75)*100
+}
+
+data.frame(Err2575 = errors[,1], Err0298 = errors[,2])
+#quant #matrix with all the errors for the differenct quantiles
+```  
+
+Answer Exercise 1e:
+
+I would expect the 0.2 and 0.98 percentile to be less accurate than the 0.25 and 0.75 percentiles when using the random sampling method because less data points fall in the outer most tails of the log normal distribution. Having less data points in those groups would increase the effect of random error caused by a small sample size. But, I find that the 0.98 and 0.02 percentiles have a lower percent error. I think this is caused by a miscalculation on my part. 
+
+## Ex 2. More on samples {-} 
+Let $f(x)=10x^2-x^3$, and write a chunk that uses the N=1000 samples from the previous exercise to estimate **(a)** the probability that $f \gt 100$ and **(b)** the expected value of $f$. Do not recompute the samples of $x$; all R-chunks are in the same R session, so each chunk has access to results computed earlier. Notice that the samples method is as easy for this exercise as for the previous exercise, but that to check it with calculus would be tiresome, even for a function as simple as $f$.    
+
+## Solution to Ex 2 {-}   
+
+```{r Ex2}
+#EXCERSISE 2
+#x is the same as the x above. N = 1000
+f = 10*(x^2) - x^3
+
+hist(f, col='white', breaks=100, freq=TRUE, xlab = 'f')
+
+quant <- 1 - plnorm(100, mean = mean(f), sd = sd(f), lower.tail=FALSE) #gives the area under the curve
+fnumber <- qlnorm(quant, mean = mean(f), sd = sd(f)) #gives the number knowing the area, checking answer
+
+dif <- abs((max(f)-min(f)))/length(f)
+fseq <- seq(min(f)+dif, max(f), by=dif)
+densityf <- dlnorm(fseq, mean = mean(f), sd = sd(f)) #gives the area under the curve
+faverage = f[which(densityf==max(densityf))] #Most likely value of f similar to median(f)
+```
+
+ANSWER Exercise 2: The chance the next randomly generated f value is greater than 100 is 53% given by the that the area under the PDF greater than 100 is `quant` calculated via the plnorm function. The expected value of f is mean(f) = `mean(f)`. Because the spread of f values is skewed, the mean is not a good representation of the average. The median(f) = `median(f)`, and the value of f associated with the highest density given by the dlnorm function is `faverage`. 
+
+## Ex 3. Gamma or lognormal? {-}  
+In our text, Figure 1.2.1 (page 15) has a generic formula that includes a stochastic process model $\left[N_t | g(\beta, N_{t-1}, x_t, \Delta t), \sigma_p\right]$ on line 2. (In accordance with my remark above, I am not squaring the scale parameters in textbook expressions.) The authors suggest somewhere that this PDF could be a gamma or a lognormal. In this exercise you will **(a)** make a figure to illustrate that when the coefficient of variation (CoV) $(\sigma/\mu)$ is small those two PDF families are pretty similar, but when the CoV is large, they can be quite different. Your figure should consist of two panels, side by side. In the left panel, plot the gamma and lognormal distributions with mean=10 and sd=2; in the right panel, plot the gamma and lognormal distributions with mean=10 and sd=10. **(b)** Briefly discuss the implications for modeling: How would you decide which family to use?    
+
+## Solution to Ex 3a {-}   
+```{r Ex3a}
+gampars <- function(u=1, o=1) { 
+  ## Moment matching for the gamma distn
+  ## Formulas derived from H&H eqns (3.4.27-28, p58-59)
+  ## Solve for a and B via substitution
+  B <- u/(o^2)
+  a <- u*B
+  list(alpha=a, beta=B)   # returned value
+}
+
+x <- seq(1, 30, 0.1)
+
+Gpars <- gampars(10,2) #moment matching for gamma normal dist.
+Lpars <- lognpars(10, 2) #moment matching for log normal dist. 
+Gpars2 <- gampars(10,10) #moment matching for gamma normal dist.
+Lpars2 <- lognpars(10, 10) #moment matching for log normal dist.
+
+xlog <- dlnorm(x, meanlog = Lpars$alpha, sdlog = Lpars$beta, log = FALSE)
+xgamma <- dgamma(x, shape= Gpars$alpha, rate = Gpars$beta, log = FALSE) #Probs wrong
+xlog2 <- dlnorm(x, meanlog = Lpars2$alpha, sdlog = Lpars2$beta, log = FALSE)
+xgamma2 <- dgamma(x, shape= Gpars2$alpha, rate = Gpars2$beta, log = FALSE) #Probs wrong
+
+par(mfrow=c(1,2))
+
+plot(x, xgamma, type="l", pch=20, col="black", ylim=c(0, 0.25),
+     xlab="x", ylab="y",main='Gamma vs LogNorm')
+lines(x, xlog,col='grey49', lty=2)
+legend(16, 0.17, legend=c("LogNorm", "Gamma"),
+       col=c("black", "grey"), lty=1:2, cex=0.8)
+
+plot(x, xlog2, type="l", pch=20, col="black",  ylim=c(0, 0.15), 
+     xlab="x", ylab="y",  main='Gamma vs LogNorm')
+lines(x, xgamma2, col='grey49', lty=2)
+legend(16, 0.1, legend=c("LogNorm", "Gamma"),
+       col=c("black", "grey"), lty=1:2, cex=0.8)
+
+```
+
+## Discussion for Ex 3b {-}   
+The figure on the left is the gamma and log normal distribution given a mean and standard error of 10 and 2. Likewise the figure on the right is the log normal and gamma distribution with a mean and standard error of 10 and 10. For the log normal distribution I I used the same moment matching equation given in this handout. For the gamma distribution I used the moment matching equation on pg. 59-60 of H&H and solved for $\alpha$ and $\beta$ using substitution, with the associated R function in the chunk above. As the standard error increases the gamma distribution is no longer similar to a log normal distribution. When constructing a model, I would not use the Gamma distribution for sample populations with a large variance if I expected the true population to haves a skewed normal distribution.  
+
+## Ex 4. Expit and logit {-}
+Write a chunk of R-code to illustrate the fact that `expit()` and `logit()` are inverse functions. **(a)** Generate 1000 random numbers $x$, say, from the standard normal, then make a plot with $x$ on the x-axis and $y=\logit(\expit(x))$ on the y-axis, and overlay it with a red line $y = x$. **(b)** Suppose you have two R-functions, `f(x)` and `g(x)`, say, that should agree on $a \lt x \lt b$ if both are correctly coded. Explain how to quickly check agreement.  
+
+## Solution to Ex 4 {-}  
+```{r Ex4}
+logit <- function(p) log(p/(1 - p))
+expit <- function(x) 1/(1 + exp(-x))
+
+x <- rnorm(1000)
+y=logit(expit(x))
+y2=x 
+
+plot(x, y, type="l", col="black",
+     xlab="x", ylab="logit(expit(x))",main='Logit vs Expit Comaprison')
+lines(x, y2,col='red', lty=2)
+legend(1.5, -1, legend=c("logit(expit(x))", "x=y"),
+       col=c("black", "red"), lty=1:2, cex=0.8)
+```
+Answer to Exercise 4: The above plot shows that for a very large range of randomly generated values the logit and expit functions are inverse of one another. A similar method can be used to test that two separately written functions agree on $a > x > b$. That is, to test function $g(x)$ and $f(x)$'s agreement, randomly generate a large sample of normally distributed values and see if $a>x>b$ for both $g(x)$ and $f(x)$ across a those values.   
+
+
+## Ex 5. Regression with BUGS {-}  
+**(a)** Write a BUGS code for the model $y_i=a+bx_i+\epsilon_i$ with $\epsilon_i \sim N(0,\sigma^2)$. Assume the data are in a vector `x` of length N and similarly for `y`. Use uniform priors for the intercept `a` and slope `b`. For the standard deviation of the normal additive noise use a gamma prior, as in the example above.  
+
+**(b)** Write a second BUGS code, similar to the one in (a), but this time make it robust to outliers by assuming additive noise with a t-distribution (JAGS manual, page 48) with `k=3` degrees of freedom. Use a gamma prior for the scale parameter `sigma` and use `1/sigma^2` where `tau` appears in the call to `dt`. Hint: Only one line of the code for (a) must be changed.  
+
+**(c)** Answer briefly in narrative: If you standardize the x-y data, will the resulting samples of $a$ and $b$ be more or less correlated? Will standardization reduce the number of samples needed to achieve a given accuracy?   
+
+**(d)** Answer briefly in narrative: Will the techniques used in (a) and (b) work for any model of the form $y=f(x)+\epsilon$ where $\epsilon$ is additive noise?  
+
+**(e)** Answer briefly in narrative: In the context of (d) which is better? A model of the form $f(x)=b_0+b_1x+b_2x^2+b_3x^3$ or a model of the form $f(x)=b_0P_0(x)+b_1P_1(x)+b_2P_2(x)+b_3P_3(x)$ in which the $P_i(x)$ are orthogonal polynomials on the range of $x$?
+
+## Solution to Ex 5. {-}  
+
+```{r Ex5a, eval = FALSE}
+# sampling model
+for (t in 1:tmax) {#Pictures j of years t 
+  N[t] <- NormN[t] #Should not be an exponential
+  y[t] ~ dpois(N[t]) #Making N, N(0,σ2), Assuming a Passion distribution for the population
+}
+
+# process model
+for (t in 2:tmax) {
+  mu[t] <- a + b * x[t] + NormN[t-1]
+  NormN[t] ~ dnorm(mu[t], mean = 0, sd = 1/sigma^2) #Making N, N(0,σ2), a uniform distribution with mean 0 and sd sigma
+}
+
+
+# priors
+a ~ dunif(-100, 100) #A draw from the Uniform distribution
+b ~ dunif(-100, 100) #A draw from the Uniform distribution
+sigma <- dgamma(0.001, 0.001) #gamma prior for the normal additive noise, but not precision this time
+
+```
+**(a)** I made an attempt at constructing the BUGS model similar to the one given in lines 240-260. Here I assign my priors a, b sigma as being pulls from uniform distributions (for a and b), and sigma as a pull form the gamma distribution. I used the linear deterministic model $y_i=a+bx_i+\epsilon_i$ as the process model, and the sampling model as a Passion distribution. I understand the sampling model should incorporate the sample distribution along with the error associated with estimating the true population form the sample population (H&H 13-14pg). I'm not sure that I capture that very well in the sampling model I provide above. I use precision, 1/sigma^2, to model additive noise represented by Norm[t-1] in the process model.
+
+
+```{r Ex5b, eval = FALSE}
+# sampling model
+for (t in 1:tmax) {#Pictures j of years t 
+  N[t] <- NormN[t] #Should not be an exponential
+  y[t] ~ dpois(N[t]) #Making N, N(0,σ2), Assuming a Passion distribution for the population
+}
+
+# process model
+for (t in 2:tmax) {
+  mu[t] <- a + b * x[t] + NormN[t-1]
+  NormN[t] ~ dt(mu[t], df = 3, ncp = 1/sigma^2, log = FALSE) #Change this to a t-distribution
+}
+
+# priors
+a ~ dunif(-100, 100) #A draw from the Uniform distribution
+b ~ dunif(-100, 100) #A draw from the Uniform distribution
+sigma <- dgamma(0.001, 0.001) #gamma prior for the normal additive noise, but not precision this time
+```
+
+**(b)**  Here the only thing I changed is that the additive noise is modeled from a t-distribution using the dtnorm function, with it's precision, 1/sigma^2, modeled the same as in ExA from the gamma distribution.  
+
+**(c)** Standardization should not increase correlation, and should not reduce the number of samples to achieve a given accuracy. 
+
+**(d)** This technique should work for any linear additive model with noise of the form $y=f(x)+\epsilon$. If $f(x)$ is not a linear additive function, the interaction with $\epsilon$ may not be represent the true effect of noise on the system, because in $y=f(x)+\epsilon$ the noise term $\epsilon$ is additive. I think. 
+
+**(e)** The range of function $f(x)=b_0+b_1x+b_2x^2+b_3x^3$ is all real numbers, and $f(x)=b_0P_0(x)+b_1P_1(x)+b_2P_2(x)+b_3P_3(x)$ has orthogonal functions P(x) within the range of $x$ so they both check out okay. Given the context of question d) my guess is that the deterministic model of form $g(x) = f(x) + \epsilon$ does not interact well with the orthogonal linear functions, and so the polynomial is better in this case. I'm very uncertain of all my anwsers for question 5. 
+
+"Deterministic functions must have an appropriate range for their predictions to be linked with the data in a statistical reliable way" - H&H pg.22
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

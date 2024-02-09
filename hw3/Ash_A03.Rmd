@@ -1,0 +1,786 @@
+---
+title: "Ash_A03"
+author: "Jamie Ash"
+date: "due: 2021-02-06"
+output: 
+  #html_document: 
+  bookdown::html_document2:  
+    self-contained: yes
+    theme: cerulean #paper #cosmo #journal #readable
+    toc: true
+    smooth_scroll: true
+    toc_depth: 3
+    toc_float: true
+    number_sections: true
+    fig_caption: yes
+    code_folding: hide
+    # bibliography: ["geothermal.bib", "r.bib"]
+    # csl: apa-5th-edition.csl
+    # link-citations: yes
+---  
+
+<style type="text/css">  
+/* Note: CSS uses C-style commenting. */
+h1.title{font-size:22px; text-align:center;}
+h4.author{font-size:16px; text-align:center;}
+h4.date{font-size:16px; text-align:center;}
+body{ /* Normal  */ font-size: 13px}
+td {  /* Table   */ font-size: 12px}
+h1 { /* Header 1 */ font-size: 16px}
+h2 { /* Header 2 */ font-size: 14px}
+h3 { /* Header 3 */ font-size: 12px}
+.math{ font-size: 10pt;}
+.hi{ /* hanging indents */ 
+    padding-left:22px; 
+    text-indent:-22px;
+}
+blockquote {  
+    padding: 10px 20px;
+    margin: 0 0 20px;
+    font-size: 12px;
+    border-left: 5px solid #eee;
+}
+code.r{ /* code */ 
+       font-size: 12px;
+}
+pre{/*preformatted text*/ 
+    font-size: 12px;
+}
+p.caption {/* figure captions */ 
+    font-size: 1.0em;
+    font-style: italic; 
+} 
+</style>
+
+```{r setup, echo=FALSE}
+rm(list=ls()) # clean up
+library(knitr)
+library(runjags)
+library(coda)
+library(zeallot)
+
+gr <- (1+sqrt(5))/2 # golden ratio, for figures
+opts_chunk$set(comment="  ",
+               #echo=FALSE,
+               cache=c(TRUE, FALSE)[2], 
+               eval.after="fig.cap",
+               collapse=TRUE, 
+               dev="png",
+               fig.width=7.0,
+               out.width="95%",
+               fig.asp=0.9/gr,
+               fig.align="center"
+               )
+
+## Kruschke's utility functions (edited by NF for use in RMarkdown)
+#if (c(TRUE,FALSE)[1]) source("DBDA2E-utilities.R") 
+
+## handy function to color text
+colorize <- function(x, color) {
+  ## x is a string
+  ## example:`r colorize("The assignment", "red")`
+  if (knitr::is_latex_output()) {
+    sprintf("\\textcolor{%s}{%s}", color, x)
+  } else if (knitr::is_html_output()) {
+    sprintf("<span style='color: %s;'>%s</span>", color, x)
+  } else x
+}
+mypar <- # Convenience wrapper for par()
+## Values are from Bloomfield (2014) "Using R for Numerical Analysis
+## in Science and Engineering." See ?par for meanings.
+function(mgp=c(2,0.5,0), mar=c(4,4,1.5,1.5), bty="l", 
+         bg=gray(0.97), tcl=0.3, mex=0.8, ...) {
+  par(mgp=mgp, mar=mar, bty=bty, bg=bg, tcl=tcl, mex=mex, ...) 
+}
+
+rmCache <- c(TRUE, FALSE)[1] # fresh start?
+if (rmCache) {
+  if (file.exists("A02_cache")) {
+    unlink("A02_cache", recursive=TRUE)
+  }
+}
+```  
+
+\newcommand{\logit}{\mathrm{logit}}
+\newcommand{\expit}{\mathrm{expit}}
+
+# Goals {-}  
+The goals of this assignment are (1) to introduce MCMC through the runjags interface, (2) introduce conjugate priors, (3) demonstrate that the uninformative prior for the Poisson PMF $p(n|\lambda)$ is the reciprocal density $1/\lambda$, and (4) illustrate that even simple problems are easier to handle with MCMC than with calculus.  
+
+## Tiny R-tips {-}  
+To get the Greek letter $\lambda$ for an x-axis label, put `xlab = expression(lambda)` in your call to `plot()`. To get $n_p$ as an x-axis label use `xlab = expression(n[p])`. 
+
+# Introduction {-} 
+H&H Chapter 5, "Simple Bayesian Models", could have been titled "Conjugate analysis" or "Conjugate priors". The phrase _conjugate prior_ is a term of art you will often encounter in BDA. Most books on BDA, including H&H, regard conjugate priors as a quick way of solving simple data analysis problems, which is true, but I think their greatest use is to show us a path to _uninformative priors_ which are important in sophisticated data analysis problems because if you don't understand uninformative priors you are at risk of adding false information to your analysis. If you have a wealth of data, the likelihood will be rich with information that will overwhelm the false information in an incorrect prior, but where BDA really shines is when you don't have much data, which is often the case when you are working on the leading edge of science.^[Which is where all graduate students work.] 
+
+In this assignment we treat the Poisson likelihood, and its conjugate prior, the gamma distribution. One application in H&H is to ticks on sheep, but the Poisson distribution is ubiquitous in science.  
+
+Review: For reference below, recall the first form of Bayes rule:
+
+$$
+\underset{\textrm{posterior}}{p(\theta|y)}\ \ \cdot
+\underset{\textrm{prior predictive}}{p(y)} 
+= \underset{\textrm{sampling distribution}}{p(y|\theta)}\cdot\ \  
+\underset{\textrm{prior}}{p(\theta)}
+$$  
+in which $\theta$ is the parameter(s) and $y$ is the data. Of course this equation can become considerably more complicated for interesting models, but this is the form to memorize. Notice how the product rule helps you immediately recognize it as a near-tautology.   
+
+# Gamma-Poisson {-}    
+
+If you choose a Poisson PMF as your sampling function and a gamma PDF as your prior for the Poisson intensity parameter, your posterior PDF for intensity will also be a gamma. We summarize this situation by saying that the gamma is the _conjugate prior_ of the Poisson. Here are the details.    
+
+## Poisson distribution {-}   
+The probability mass function (PMF) of the Poisson distribution (H&H eqn. 3.4.18) is
+
+$$
+\Pr(n|\lambda)=\frac{\lambda^n}{n!}e^{-\lambda}
+$$  
+
+in which $\lambda$ is the _intensity_. If you recall the Taylor series you learned in calculus long ago, you can immediately see that the PMF is correctly scaled, i.e., that $1=\sum_{n=0}^\infty \Pr(n|\lambda)$, because $\sum_{n=0}^\infty \lambda^n/n! = e^\lambda$. A straightforward calculation shows that the mean of the Poisson is $\lambda$, and, somewhat surprisingly, that its variance is also equal to $\lambda$.  
+
+## Poisson likelihood {-}   
+Suppose you have $N$ sheep, and there are $n_i$ ticks on the $i^{th}$ sheep. Assuming the ticks have a Poisson distribution, and making the usual assumption that the $n_i$ are independent, the joint distribution of the $n_i$ is the product of $N$ Poisson distributions:  
+
+$$\begin{align}
+\Pr(n_1, n_2,\ldots,n_N|\lambda) 
+&= \prod_{i=1}^N \frac{\lambda^{n_i}}{n_i!}e^{-\lambda} \\
+&= \frac{1}{n_1! n_2!\cdots n_N!} \lambda^{\Sigma_in_i}e^{-N\lambda}
+\end{align}$$  
+
+If we substitute the actual data values $n_1, n_2,\ldots,n_N$ into this equation it will be a function of $\lambda$ called the likelihood. But for now, let's continue to regard it as the joint distribution of the stochastic $n_i$ given $\lambda$, i.e., the so-called sampling distribution.  
+
+Before preceding, let's reduce some of the clutter by introducing the following convenient notations: $\pmb{n}= n_1,n_2,\ldots,n_N$, $\pmb{n}!=n_1!\,n_2!,\ldots,n_N!$, $\Sigma\pmb{n}=\sum_{i=1}^N n_i$. With those definitions that last equation (sampling distribution) may now be written
+
+$$
+\Pr(\pmb{n}|\lambda) = \frac{1}{\pmb{n}!}\lambda^{\Sigma\pmb{n}}e^{-N\lambda}
+$$
+
+## Gamma distribution {-} 
+Recall the PDF of the gamma distribution (H&H eqn 3.4.29, p59) is  
+
+$$
+p(\lambda|\alpha,\beta)=\frac{\beta^\alpha}{\Gamma(\alpha)} 
+\lambda^{\alpha-1} e^{-\beta\lambda},
+$$  
+
+in which $\alpha$ is called the _shape_ and $beta$ is called the rate.  
+
+Notice that the gamma PDF is a constant factor $\beta^\alpha/\Gamma(\alpha)$ times a _kernel_. For any PDF, the kernel is the part that you should try to memorize because that is the key to its behavior. The constant factor is there so that the integral of the PDF from 0 to $\infty$ will be 1 in accordance with the sum rule.   
+
+Important properties of the gamma distribution are:  
+
+(1) Setting $\alpha=1$ gives you the so-called _exponential distribution_. The black curve on the figure below is an example.  
+
+(2) Setting $\alpha=0,\,\beta=0$ gives you the improper _reciprocal density_ $x^{-1}$ shown in red on the figure below. The term "improper" just means that the integral of the density is infinite, hence it does not obey the sum rule. We will see that improper densities play an important role in BDA, and there is no need to be afraid of them.  
+
+(3) Setting $\alpha=1,\, \beta=0$ gives you the (improper) constant density shown in blue on the figure below.  
+
+```{r gamma, out.width="80%", fig.cap="The gamma kernel for rate (beta)=0 and various shape parameters (alpha). Shape=0 gives the improper reciprocal density y=x^-1^, shown in red; and shape=1 gives the improper uniform density y=1, shown in blue."}
+op <- mypar()
+gamKern <- function(x, shape, rate) {
+  x^(shape - 1)*exp(-rate*x)/exp(-rate*x)
+}
+x <- seq(0, 3, length.out=101)[-1]
+## left panel, rate=0
+y1 <- gamKern(x, shape=0.0, rate=0)
+y2 <- gamKern(x, shape=0.6, rate=0)
+y3 <- gamKern(x, shape=1.0, rate=0)
+xlim <- c(0, max(x)); ylim <- c(0, 2) 
+plot( x, y1, col="red"  , lwd=2, panel.first=grid(),
+      ylab="y", xlim=xlim, ylim=ylim, type="l", xaxs="i", yaxs="i")
+lines(x, y2, col="black")
+lines(x, y3, col="blue" , lwd=2)
+legend("topright", title="Gamma kernel, rate=0",
+       inset=0.05, bty="n", 
+       legend=c("shape=0.0", "shape=0.6", "shape=1.0"),
+       lwd=c(2, 1, 2), col=c("red", "black", "blue"))
+```
+
+
+## Gamma prior {-}  
+Notice that the kernel of the gamma PDF depends on $\lambda$ in a manner similar to the way our Poisson likelihood depends on $\lambda$. That is why we sneakily picked the gamma for our prior. When we multiply the Poisson likelihood by the gamma prior, the posterior will turn out to be another gamma.  
+
+## Joint distribution {-}  
+
+So that nothing is hidden, we begin carefully with a tautology consisting of the unknown joint distribution on each side of the equals sign, with all the variables of interest as its arguments. We then "turn the crank" using the product rule and independence, so that the LHS becomes the posterior times the prior predictive, and the RHS becomes the sampling distribution times the prior. Here we go:
+
+$$\begin{align}
+p(\pmb{n},\lambda, \alpha, \beta) &= p(\pmb{n},\lambda, \alpha, \beta) 
+&\textrm{tautology} \\
+p(\lambda | \pmb{n},\alpha, \beta)\,p(\pmb{n},\alpha, \beta)
+&= p(\pmb{n},\lambda, \alpha, \beta) 
+&\textrm{product rule on LHS} \\
+p(\lambda | \pmb{n},\alpha, \beta)\,p(\pmb{n},\alpha, \beta)
+&= p(\pmb{n}|\lambda, \alpha, \beta)\, p(\lambda, \alpha, \beta) 
+&\textrm{product rule on RHS} \\
+p(\lambda | \pmb{n},\alpha, \beta)\,p(\pmb{n}|\alpha, \beta)\,p(\alpha,\beta)
+&= p(\pmb{n}|\lambda, \alpha, \beta)\, p(\lambda| \alpha, \beta)\,p(\alpha,\beta) 
+&\textrm{product rule both sides} \\
+p(\lambda | \pmb{n},\alpha, \beta)\,p(\pmb{n}|\alpha, \beta)
+&= p(\pmb{n}|\lambda, \alpha, \beta)\, p(\lambda| \alpha, \beta) 
+&\textrm{divide by }p(\alpha,\beta) \\
+\underset{\textrm{posterior}}{p(\lambda | \pmb{n},\alpha, \beta)}\,
+\underset{\textrm{prior predictive}}{p(\pmb{n}|\alpha, \beta)}
+&= \underset{\textrm{sampling distribution}}{p(\pmb{n}|\lambda)}\, 
+\underset{\textrm{prior}}{p(\lambda| \alpha, \beta)} 
+&\pmb{n}\textrm{ depends only on }\lambda \\
+\end{align}$$  
+
+Next we substitute our specific sampling distribution and prior, then rearrange factors to obtain our posterior and prior predictive:  
+
+$$\begin{align}  
+\underset{\textrm{posterior}}{p(\lambda | \pmb{n},\alpha, \beta)}\,
+\underset{\textrm{prior predictive}}{p(\pmb{n}|\alpha, \beta)}
+&= \underset{\textrm{sampling distribution}}{p(\pmb{n}|\lambda)}\, 
+\underset{\textrm{prior}}{p(\lambda| \alpha, \beta)} \\
+&=\underset{\textrm{sampling distribution}}
+{\frac{1}{\pmb{n}!} \lambda^{\Sigma\pmb{n}}e^{-N\lambda}}
+\cdot
+\underset{\textrm{prior}}
+{\frac{\beta^\alpha}{\Gamma(\alpha)}\lambda^{\alpha-1}\,e^{-\beta\lambda}}\\
+&= \lambda^{\alpha+\Sigma\pmb{n}-1} e^{-\lambda(\beta+N)}\cdot
+\frac{1}{\pmb{n}!}\frac{\beta^\alpha}{\Gamma(\alpha)} \\
+&= \frac{\beta^{\alpha+\Sigma\pmb{n}}}{\Gamma(\alpha+\Sigma\pmb{n})}
+\lambda^{\alpha+\Sigma\pmb{n}-1} e^{-\lambda(\beta+N)}\cdot
+\frac{\Gamma(\alpha+\Sigma\pmb{n})}{\beta^{\alpha+\Sigma\pmb{n}}}
+\frac{1}{\pmb{n}!}\frac{\beta^\alpha}{\Gamma(\alpha)} \\
+&= \underset{\textrm{posterior}}{\textrm{gamma}(\lambda|\alpha+\Sigma\pmb{n},\beta+N)}\cdot
+\frac{1}{\pmb{n}!}
+\underset{\textrm{prior predictive}}{\frac{\Gamma(\alpha+\Sigma\pmb{n})}{\beta^{\Sigma\pmb{n}}\Gamma(\alpha)}}
+\end{align}$$  
+
+## Gamma posterior {-}  
+
+By simple algebra we found that our posterior was a gamma PDF with shape $\alpha+\Sigma\pmb{n}$ and rate $\beta+N$. (The prior predictive that we found undoubtedly has a name, but it isn't of interest so we won't pursue it.)  Recall that the mean of the gamma distribution is shape divided by rate, hence the posterior mean of $\lambda$ is 
+
+$$
+E(\lambda|\pmb{n},\alpha,\beta)=\frac{\alpha+\Sigma\pmb{n}}{\beta+N}
+$$  
+Remembering the ticks-on-sheep problem, what would be your expected value for intensity $\lambda$ if you had no prior information at all? I don't know about you, but for me it would be $\Sigma\pmb{n}/N$, the average number of ticks per sheep. This suggests that the _uninformative prior_ for Poisson intensity is a gamma distribution with zero shape and rate, which, as we saw above, is the (improper) reciprocal density $\lambda^{-1}$. Computer programs such as JAGS and Stan cannot handle improper densities, which is why you often see a gamma with shape=0.001 and rate=0.001. (Later in the course we will learn another way to approximate improper densities in numerical work.)  
+
+Notice that if we have lots of sheep (large N) and lots of ticks (large $\Sigma\pmb{n}$), the shape and rate of the prior have little effect on the posterior. This is a typical situation in BDA---large amounts of data overwhelm any vague prior. The prior is most important when data are scarce.  
+
+If you did not know the uninformative prior for the Poisson, you might be inclined to use a gamma with shape=1 and rate=0, i.e., the (improper) uniform density; but you see from the expression for the mean how that would bias the posterior toward larger values of intensity. 
+
+## Improper densities {-}  
+
+What information do improper densities carry, you may ask? The answer is that they do not carry information about probability, only ratios of probabilities. For the reciprocal density, we may write
+
+$$
+\frac{\Pr(a \lt r \lt b)}{\Pr(c \lt r \lt d)}
+=\frac{\int_a^b r^{-1}dr}{\int_c^d r^{-1}dr}
+=\frac{\log(b)-\log(a)}{\log(d)-\log(c)}
+=\frac{\log(b/a)}{\log(d/c)}
+$$  
+
+## Posterior predictive {-}  
+
+The generic posterior predictive distribution is the distribution of predicted data $y_p$, given the observed data $y$ and the sampling distribution $p(y|\theta)$.  
+
+$$
+\underset{\textrm{posterior predictive PDF}}{p(y_p|y)}=\int\!d\theta\,
+\underset{\textrm{sampling PDF}}{p(y_p|\theta)}\cdot
+\underset{\textrm{posterior PDF}}{p(\theta|y)}
+$$  
+To draw a sample from the posterior predictive, you draw a sample of $\theta$ from the posterior, substitute that sample of $\theta$ into the sampling distribution and draw a sample from it.  
+
+In the particular problem of this assignment, it may be written as  
+
+$$\begin{align}
+\underset{\textrm{posterior predictive PMF}}{p(n_p|\pmb{n},\alpha,\beta)}
+&=\int_0^\infty\!d\lambda\,
+\underset{\textrm{sampling PMF}}{p(n_p|\lambda)}\cdot\ 
+\underset{\textrm{posterior PDF}}{p(\lambda|\pmb{n},\alpha,\beta)}\\
+\underset{\textrm{posterior predictive PMF}}{p(n_p|\alpha',\beta')}
+&=\int_0^\infty\!d\lambda\,
+\underset{\textrm{Poisson PMF}}{p(n_p|\lambda)}\cdot\ 
+\underset{\textrm{gamma PDF}}{p(\lambda|\alpha',\beta')}
+\end{align}$$  
+
+in which, as we saw above $\alpha'=\alpha+\Sigma\pmb{n}$ and $\beta'=\beta+N$.  
+
+We do the integral on the RHS of the last equation.^[The value of the integral is obvious if you remember that the integral of the gamma PDF is 1.] For clarity, we drop the primes from the $\alpha$ and $\beta$. Just remember that when we apply the following formula we must use $\alpha'$ and $\beta'$ instead of $\alpha$ and $\beta$.
+
+$$\begin{align}
+\int_0^\infty\!\! d\lambda\,
+\underset{\textrm{Poisson PMF}}{p(n_p|\lambda)}\cdot\ 
+\underset{\textrm{gamma PDF}}{p(\lambda|\alpha,\beta)}
+&=\int_0^\infty\!\!d\lambda\, \frac{\lambda^{n_p}}{n_p!} e^{-\lambda}\ 
+\cdot \frac{\beta^{\alpha}}{\Gamma(\alpha)}
+\lambda^{\alpha-1} e^{-\beta\lambda} \\
+&=\frac{1}{n_p!}\frac{\beta^\alpha}{\Gamma(\alpha)}
+\int_0^\infty\!\!d\lambda\, \lambda^{n_p+\alpha-1} e^{-(\beta+1)\lambda}\\
+&=\frac{1}{n_p!}\frac{\beta^\alpha}{\Gamma(\alpha)}\,
+\frac{\Gamma(n_p+\alpha)}{(\beta+1)^{n_p+\alpha}}
+\end{align}$$  
+
+This is a negative binomial distribution, but we do not need to know that. All we need to do is code the formula.   
+
+## BUGS model {-}  
+
+Here is the BUGS model for our ticks-on-sheep problem. There are `N` sheep and the number of ticks on the ith sheep is `n[i]`. The "data" supplied to JAGS will be `N`, `n[1:N]`, `alpha` and `beta`. An initial value will be needed for the stochastic variable `lambda`. The stochastic variable `np` is _posterior predicted data_, used for model checking. If the actual data are way out in one of the tails of the posterior predictive distribution, we should try to understand why, and question whether our model is the correct one.  
+
+    /* data sampling */
+    for (i in 1:N) {
+      n[i] ~ dpois(lambda)
+    }
+    
+    /* prior */
+    lambda ~ dgamma(alpha, beta)
+    
+    /* sample from posterior predictive */
+    np ~ dpois(lambda)
+
+# Exercises {-}    
+
+Do all calculations in code chunks, and give numerical results in the narrative using inline code. Example: You computed a quantity with name `z` in a chunk and you want to give its numerical value in the narrative. In the place where you want the number to appear type a backtick, then an r, then a space, then round(z, 1), then a closing backtick. The second argument of `round()` is the number of places you want after the decimal point. You could also use the `signif()` function or the `sprintf()` function or the `format()` function. You can even use `paste()`. Whatever function you use, do not show spurious digits after the decimal point. For example, if the numerical value of `z` in R is 10.317920485 and the uncertainty in `z` is around 0.1 you should display the numerical value of `z` as 10.3. To do otherwise is to mislead the reader.^[Engineers have this principle instilled in them as undergrads, but in other branches of science it doesn't seem to happen until graduate school.] To see examples of how I like to handle percentages open `Frazer_A01.Rmd` and use the toolbar magnifier to search for `round`.      
+
+## Ex 1. (5 pts) {-}  
+
+Consider the gamma distribution with $\alpha=\beta$. How does the mean behave as these parameters approach zero together? How does the variance behave? Give your answer in narrative, and don't overthink this; no coding is needed.   
+
+## Solution to Ex 1 {-}
+```{r, EX1Solution, fig.asp=0.40, fig.cap="Visualization of the mean and variance of the gamma distribution when alpha and beta range from 0 to 1 and alpha = beta. The left panel is the mean, and the right panel is the variance"}
+
+itesmal <- seq(0.00001, 1, by=0.001)
+
+datm <- rep(0, length(itesmal))
+datv <- rep(0, length(itesmal))
+j <- 0
+
+for (i in itesmal) {
+  set.seed(125)
+  j <- j+1
+  dat <- rgamma(1000, shape = i, rate = i) 
+  datm[j] <- mean(dat)
+  datv[j] <- var(dat)
+  }
+
+mypar(mfrow=c(1,2)) # tick length
+plot(itesmal, datm, pch=20,
+     main="Gamma Mean",
+     xlab="Shape and Rate",
+     ylab = "Mean")
+plot(itesmal, datv, pch=20, 
+     main= "Gamma Variance", 
+     xlab="Shape and Rate",
+     ylab="Variance")
+```
+**Answer Ex1:** For the Gamma distribution, when $\alpha$ = $\beta$ and both approach 0, the mean and standard deviation approach 0, but are maximized "just before" 0. I believe the maximum variance approaches infinity "just before" 0. As both $\alpha$ and $\beta$ approach infinity the mean approaches a constant value (of 1) and the variance asymptotes at 0. I ended up coding for this question.
+
+
+## Ex 2. (45 pts) {-}  
+
+You are given more information than you need in this exercise. Don't be fooled into using the unneeded information.  
+
+(a) You have a flock of 105 sheep, and you inspect two of them for ticks. One sheep has 2 ticks and the other has 3 ticks. What is your posterior gamma for tick intensity using no prior knowledge? Graph the posterior and give its shape, rate, mean and SD.  
+
+(b) Same as (a), but this time you decide to use information from the five previous years as your prior. In the five previous years your flock contained, respectively (153, 97, 102, 118, 132) sheep, and ticks per sheep averaged 12.5 with an SD of 5.2. Graph the posterior and give its shape, rate, mean and SD. Graph your prior on the same axes.  
+
+Hint: You may want to code the following two functions:  
+```{r}
+mnsd <- function(shape, rate) {
+  ## mean and sd of gamma
+  stopifnot(rate > 0 )
+list(mn=shape/rate, sd=sqrt(shape/rate^2))
+}
+
+#Moment matching function for the gamma function
+shrt <- function(mn, sd) {
+  ## shape and rate of gamma
+  list(shape=mn^2/sd^2, rate=mn/sd^2)
+}
+```
+
+## Solution to Ex 2 {-}  
+Solution code for Example 2a) and 2b)
+```{r, Ex2a, fig.asp=0.40, fig.cap="Left Panel: Plot of the uninformed posterior across the tick range of 1-13. Right Panel: Plot of the informed posterior when the prior’s mean and standard deviation are equal to 12.5 and 5.2 respectively"}
+N <- 2         # number of sheep
+n <- c(2, 3)   # ticks on each sheep
+
+ticks <- seq(0,12, by=0.1)
+
+alpha_p <- 0 + sum(n) #Alpha prime for the uninformative prior
+beta_p <- 0 + N #Beta prime for the uninformative prior
+Unpostmean <- mnsd(alpha_p, beta_p)
+
+dens <- dgamma(ticks, shape= alpha_p, rate = beta_p)
+
+legends1 <- c(Unpostmean$mn, Unpostmean$sd, alpha_p, beta_p)
+legends1 <- round(legends1, digits=2)
+legends1 <- as.character(legends1)
+header <- c("mean","sd","shape","rate")
+
+#NOW b)
+moment <- shrt(12.5, 5.2)
+ticks2 <- seq(0,30,by=0.1)
+
+N <- 2         # number of sheep
+n <- c(2, 3)   # ticks on each sheep
+
+alpha <- moment$shape
+beta <- moment$rate
+
+alpha_p <- alpha + sum(n) #Alpha prime for the uninformative prior
+beta_p <- beta + N #Beta prime for the uninformative prior
+
+postmean <- mnsd(alpha_p, beta_p) #for poste
+header <- c("mean","sd","shape", "rate")
+legends2 <- c(postmean$mn, postmean$sd, alpha_p, beta_p)
+legends2 <- round(legends2, digits=2)
+legends2 <- as.character(legends2)
+
+postdens <- dgamma(ticks2, shape = alpha, rate = beta) #Posterior Predictive
+priordens <- dgamma(ticks2, shape = alpha_p, rate = beta_p) #Prior Predictive
+
+mypar(mfrow=c(1,2), tcl=-0.3) # tick length
+
+#Ploting the density function
+plot(ticks, dens, pch=20,
+     xlab = 'Ticks',
+     ylab = 'Density')
+legend(9, 0.3, legend=legends1,
+       col=c('grey69', "black"), cex=0.8)
+legend(6, 0.3, legend=header,
+       col=c('grey69', "black"), cex=0.8)
+title('a) Uninformed Posterior')
+
+plot(ticks2, priordens, pch=20)
+points(ticks2, postdens, pch=20, col='grey69')
+legend(14, 0.32, legend=c("Prior", "Posterior"),
+       col=c('grey69', "black"), lty=c(1,1), cex=0.8)
+#legend(20, 0.25, legend=legends,
+#       col=c('grey69', "black"), cex=0.8)
+legend(20, 0.23, legend=legends2,
+       col=c('grey69', "black"), cex=0.8)
+legend(14, 0.23, legend=header,
+       col=c('grey69', "black"), cex=0.8)
+title('b) Informed Posterior and Prior')
+
+```
+**Answer Ex2A:** The uninformed posterior is plotted as the black doted line in figure a). The mean, standard deviation, shape, and rate are `r legends1` respectively. The shape and rate for were found using the equation given in the gamma posterior section of this handout, with the prior $\alpha$ and $\beta$ set to 0. Then to find the mean and standard deviation of the uninformed posterior, $\alpha$ and $\beta$ were moment matched using the moment matching function provided in this handout (also in H&H Chapter 3). 
+
+**Answer Ex2B:** The informed posterior and informed prior are plotted in figure b) as the black and gray dotted lines. Given a mean and standard deviation of 12.5, and 5.2, for the informed prior; The mean, standard deviation, rate, and shape of the informed posterior are `r legends2` respectively.  
+
+## Ex 3. (15 pts) {-}  
+
+This exercise tests your understanding of Bayes rule, and should not take more than ten minutes.   
+
+The following equation is the derivation of the various forms of Bayes rule from A02. Fix it to explicitly include two prior parameters $a$ and $b$ (to save typing we are using $a$ instead of $\alpha$ and $b$ instead of $\beta$) by inserting things like "$a,b$",  "$|a,b$" and "$p(a,b)$" in various places, as in the equation for the joint distribution above. At some point you will divide by "$p(a,b)$", and later you will divide by $p(y|a,b)$. Hint: To avoid LaTeX rage, work by changing one thing at a time; if the equation doesn't display in the Rmd, undo the change and try again.  
+
+$$\begin{align}
+p(\theta,y)&=p(\theta,y) &\text{tautology}\\
+p(\theta|y)\cdot p(y) &= p(y|\theta)\cdot p(\theta)
+&\text{product rule}\\
+p(\theta|y) &= \frac{p(y|\theta)\cdot p(\theta)}{p(y)}
+&\text{divide by } p(y) \text{ gives BR1} \\
+&= \frac{p(y|\theta)\cdot p(\theta)}{\int\! d\theta\, p(\theta,y)}
+&\text{marginalization} \\
+&= \frac{p(y|\theta)\cdot p(\theta)}{\int\! d\theta\, p(y|\theta)\cdot p(\theta)}
+&\text{product rule gives BR2} \\
+&\propto p(y|\theta)\cdot p(\theta) 
+&\text{setting y=data gives BR3}\\
+&\propto p(y,\theta) 
+&\text{product rule gives BR4}\\
+\end{align}$$  
+
+## Solution to Ex 3 {-}  
+
+$$\begin{align}
+p(\pmb{\theta},y, \alpha, \beta) &= p(\pmb{\theta},y, \alpha, \beta) 
+&\textrm{tautology} \\
+p(y | \pmb{\theta},\alpha, \beta)\,p(\pmb{\theta},\alpha, \beta)
+&= p(\pmb{\theta},y, \alpha, \beta) 
+&\textrm{product rule on LHS} \\
+p(y | \pmb{\theta},\alpha, \beta)\,p(\pmb{\theta},\alpha, \beta)
+&= p(\pmb{\theta}|y, \alpha, \beta)\, p(y, \alpha, \beta) 
+&\textrm{product rule on RHS} \\
+p(y | \pmb{\theta},\alpha, \beta)\,p(\pmb{\theta}|\alpha, \beta)\,p(\alpha,\beta)
+&= p(\pmb{\theta}|y, \alpha, \beta)\, p(y| \alpha, \beta)\,p(\alpha,\beta) 
+&\textrm{product rule both sides} \\
+p(y | \pmb{\theta},\alpha, \beta)\,p(\pmb{\theta}|\alpha, \beta)
+&= p(\pmb{\theta}|y, \alpha, \beta)\, p(y| \alpha, \beta) 
+&\textrm{divide by }p(\alpha,\beta) \\
+p(y | \pmb{\theta},\alpha, \beta)\,
+p(\pmb{\theta}|\alpha, \beta)
+&=p(\pmb{\theta}|y)\, 
+p(y| \alpha, \beta)\,
+&\pmb{\theta}\textrm{ depends only on }y \\
+p(\theta|y) &= \frac{p(y | \pmb{\theta},\alpha, \beta)\cdot p(\pmb{\theta}|\alpha, \beta)}{p(y| \alpha, \beta)}
+&\text{divide by } p(y| \alpha, \beta) \text{ gives BR1} \\
+&= \frac{p(y | \pmb{\theta},\alpha, \beta)\cdot p(\pmb{\theta}|\alpha, \beta)}{\int\! d\theta\, p(\theta,y| \alpha, \beta)}
+&\text{marginalization} \\
+&= \frac{p(y | \pmb{\theta},\alpha, \beta)\cdot p(\pmb{\theta}|\alpha, \beta)}{\int\! d\theta\, p(\beta|\theta,y| \alpha) \cdot p(\theta,y| \alpha)}
+&\text{product rule gives BR2} \\
+&\propto p(y | \pmb{\theta},\alpha, \beta)\cdot p(\pmb{\theta}|\alpha, \beta)
+&\text{setting y=data gives BR3}\\
+&\propto {p(\beta|\theta,y| \alpha) \cdot p(\theta,y| \alpha)}
+&\text{product rule gives BR4}\\
+\end{align}$$ 
+
+**Answer Ex3:** I began by using the method to derive the joint distribution above, and where that left off, I continued by using the method given for this question (Example 3). I was able to use independence to drop $\alpha$ and $\beta$ from $p(y | \pmb{\theta},\alpha, \beta)\,p(\pmb{\theta}|\alpha, \beta)=p(\pmb{\theta}|y)\, p(y| \alpha, \beta)$ because $\alpha$ and $\beta$ are prior peramiters and $\theta$ does not depend on them. 
+
+# MCMC with JAGS {-}  
+
+Using JAGS on the simple model of this assignment is like using a four-pound hammer to kill a mosquito, but it's a quick introduction to MCMC. Here we do the above problem with JAGS, interfacing with JAGS through the `runjags` package. Afterward we'll compare the JAGS results with our results from the conjugate analysis. 
+
+## specify model {-}  
+
+In the following chunk we make our BUGS model into a character string for `runjags`. Notice the quote signs, and that the string begins with the word "model".   
+
+```{r modelString}
+modelString <- "model { 
+/* observations */
+for (i in 1:N) {
+  n[i] ~ dpois(lambda)
+}
+    
+/* prior */
+lambda ~ dgamma(alpha, beta)
+
+/* posterior predictive */
+np ~ dpois(lambda)
+}"
+```  
+
+## specify data {-}
+Runjags wants its data in the form of a list. The list can also be used to pass parameter values, shape and rate in our case.  
+
+```{r data_1}
+N <- 2         # number of sheep
+n <- c(2, 3)   # ticks on each sheep
+alpha <- 0.001 # shape of gamma prior
+beta  <- 0.001 # rate of gamma prior
+data_1 <- list(N = N,         
+               n = n,   
+               alpha = alpha, 
+               beta  = beta    
+              )
+```  
+
+## specify initial values {-}  
+The only stochastic parameter in this problem is $\lambda$, so our initial values list will have one initial value list for each MCMC chain. I will use only three chains for this problem so that it will run quickly. To see how many cores your machine has, install the `parallel` package and type `parallel::detectCores()` in the console. In real research problems you will want to run more than three chains. You will want to be able to work on other things while JAGS is running, so set the number of chains to `detectCores() - 1`, leaving one core free for other work.  
+
+```{r initialvalues}
+set.seed(12)
+nChains <- 3 # detectCores() - 1 is best, but we use 3
+inits <- vector(mode="list", length=nChains) # pre-allocate
+for (ic in 1:nChains) {
+  lambda <- runif(1, min = 0.8*sum(n)/N, max = 1.2*sum(n)/N)
+  inits[[ic]] <- list(lambda = lambda)
+}
+```  
+
+## run.jags() {-}   
+
+The function `run.jags()` is, not surprisingly, in the `runjags` package. That package has another function called `autorun.jags()` that takes some of the guesswork out of things, but it is rather conservative in the number of samples it takes, so in the interest of speed we will stick to `run.jags()`.    
+```{r runrunjags, collapse=TRUE}
+# library(runjags) loaded in setup chunk
+set.seed(987)
+burnin <- 1000
+rjo <- # S3 object of class "runjags"
+  run.jags(model = modelString,
+           silent.jags = TRUE,
+           data = data_1,
+           n.chains = 3,
+           adapt = 500,
+           burnin = burnin,
+           sample = 3000,
+           method = "parallel",
+           inits = inits,
+           modules = "glm",
+           monitor = c("lambda", "np") # keep samples for these variables
+          )
+# If this crashes, type failed.jags() in the console for suggestions.  
+cleanup.jags() # cleanup any failed runs  
+# plot(rjo)    # summary plots
+```  
+
+## Extract samples {-} 
+The function `run.jags()` creates an object of class `runjags`, a named list that has a lot of useful stuff in it. In order to be brief here, we'll just pick out the samples and plot them.       
+
+```{r runjagsSamples, fig.asp=0.40, fig.cap="Results from JAGS and conjugate analysis. Left panel: the posterior from JAGS (blue) and from our conjugate analysis (red). Right panel: Posterior predictive from JAGS (blue bars) and conjugate analysis (red circles). Note that the results from JAGS may be slightly different every time due to random number generation. The two data points are indicated by red asterisks. (Recall that two sheep were inspected; one sheep had two ticks and the other had three.)"}
+
+sams <- as.matrix(rjo$mcmc) # extract samples
+# head(sams, 3) # check column names
+mypar(mfrow=c(1,2), tcl=-0.3) # tick length
+## left panel
+xy <- density(sams[ ,"lambda"]) # see ?density
+plot(xy$x, xy$y, xlab=expression(lambda), type="l",
+     col="skyblue", lwd=5,
+     yaxs="i", ylab=expression("density (units of "*1/lambda*")"), 
+     panel.first=grid(),
+     main="Posterior", ylim=c(0, 1.1*max(xy$y)))
+## add conjugate posterior to left panel
+x <- seq(0, 8, len=101)
+y <- dgamma(x, shape = alpha + sum(n), rate = beta + N)
+lines(x, y, col="red")
+legend("topright", bty="n", col=c("skyblue", "red"), lty=c(1,1),
+       lwd=c(4,1), legend=c("MCMC", "calculus"))
+
+## right panel
+## Histogram of the posterior predictive samples
+Nbins <- 13
+counts <- integer(length = Nbins)
+ii <- 1:Nbins # bin index
+for (i in ii) {
+  counts[i] <- sum(sams[ ,"np"] == (i-1))
+}
+prop <- counts/nrow(sams) 
+## plot the histogram
+plot(ii-1, prop, xlab=expression(n[p]), ylab="Probability", 
+     panel.first=grid(), main="Posterior predictive",
+     type="h", yaxs="i", col="skyblue", lwd=4, ylim=c(0, 0.25) 
+     )
+## Add posterior predictive from conjugate analysis  
+alpha_p <- alpha + sum(n)
+beta_p <- beta + N
+negbin <- function(np, alpha, beta) {
+  1/factorial(np)*
+    beta^alpha/gamma(alpha)*
+    gamma(np + alpha)/(beta + 1)^(np + alpha)
+}
+points(ii-1, negbin(np=ii-1, alpha=alpha_p, beta=beta_p),
+       col="red")
+points(n, c(0.01,0.01), pch=8, col="red")
+legend("topright", lty=c(1,NA,NA), lwd=c(4,NA,NA),
+       col=c("skyblue","red","red"), pch=c(NA,1,8), bty="n",
+       legend=c("MCMC","calculus","data"))
+```  
+
+# An MCMC exercise {-}  
+
+## Ex 4. (35 pts) {-}  
+The JAGS example above used a (nearly) uninformative prior. Revise it to use a gamma prior with mean = 12.5 and SD = 5.2. You may have to adjust the limits of your plot axes in the new figure. Hint: The given mean and SD are the same ones used in Exercise 2, so you can tell what should happen.    
+
+## Solution to Ex 4 {-}
+
+specify model
+```{r }
+modelString <- "model { 
+/* observations */
+for (i in 1:N) {
+  n[i] ~ dpois(lambda)
+}
+    
+/* prior */
+lambda ~ dgamma(alpha, beta)
+
+/* posterior predictive */
+np ~ dpois(lambda)
+}"
+```
+
+specify data
+```{r }
+moment <- shrt(mn=12.5, sd=5.2)
+#Not sure what N and n to use if the mean and sd are different 
+N <- 2         # number of sheep
+n <- c(2, 3)   # ticks on each sheep
+alpha <- moment$shape # shape of gamma prior. Informed now
+beta  <- moment$rate # rate of gamma prior. Informed Now
+data_1 <- list(N = N,         
+               n = n,   
+               alpha = alpha, 
+               beta  = beta    
+              )
+
+```  
+
+specify initial values
+```{r }
+set.seed(12)
+nChains <- 3 # detectCores() - 1 is best, but we use 3
+inits <- vector(mode="list", length=nChains) # pre-allocate
+for (ic in 1:nChains) {
+  lambda <- runif(1, min = 0.8*sum(n)/N, max = 1.2*sum(n)/N)
+  inits[[ic]] <- list(lambda = lambda)
+}
+```
+
+run jags
+```{r, collapse=TRUE}
+# library(runjags) loaded in setup chunk
+set.seed(987)
+burnin <- 1000
+rjo <- # S3 object of class "runjags"
+  run.jags(model = modelString,
+           silent.jags = TRUE,
+           data = data_1,
+           n.chains = 3,
+           adapt = 500,
+           burnin = burnin,
+           sample = 3000,
+           method = "parallel",
+           inits = inits,
+           modules = "glm",
+           monitor = c("lambda", "np") # keep samples for these variables
+          )
+# If this crashes, type failed.jags() in the console for suggestions.  
+cleanup.jags() # cleanup any failed runs  
+# plot(rjo)    # summary plots
+```  
+
+Pltting Model output 
+```{r, fig.asp=0.40, fig.cap="Results from JAGS and conjugate analysis. Left panel: the posterior from JAGS (blue) and from our conjugate analysis (red). Right panel: Posterior predictive from JAGS (blue bars) and conjugate analysis (red circles). Note that the results from JAGS may be slightly different every time due to random number generation. The two data points are indicated by red asterisks.- N. Frazier"}
+sams <- as.matrix(rjo$mcmc) # extract samples
+# head(sams, 3) # check column names
+mypar(mfrow=c(1,2), tcl=-0.3) # tick length
+
+## left panel
+xy <- density(sams[ ,"lambda"]) # see ?density
+plot(xy$x, xy$y, xlab=expression(lambda), type="l",
+     col="skyblue", lwd=5,
+     yaxs="i", ylab=expression("density (units of "*1/lambda*")"), 
+     panel.first=grid(),
+     main="a) Posterior", ylim=c(0, 1.1*max(xy$y)))
+
+## add conjugate posterior to left panel
+x <- seq(0, 8, len=101)
+
+y <- dgamma(x, shape = alpha + sum(n), rate = beta + N)
+lines(x, y, col="red")
+legend("topright", bty="n", col=c("skyblue", "red"), lty=c(1,1),
+       lwd=c(4,1), legend=c("MCMC", "calculus"))
+
+## right panel
+## Histogram of the posterior predictive samples
+Nbins <- 13
+counts <- integer(length = Nbins)
+ii <- 1:Nbins # bin index
+for (i in ii) {
+  counts[i] <- sum(sams[ ,"np"] == (i-1))
+}
+prop <- counts/nrow(sams) 
+
+## plot the histogram
+plot(ii-1, prop, xlab=expression(n[p]), ylab="Probability", 
+     panel.first=grid(), main="b) Posterior predictive",
+     type="h", yaxs="i", col="skyblue", lwd=4, ylim=c(0, 0.25) 
+     )
+
+## Add posterior predictive from conjugate analysis  
+alpha_p <- alpha + sum(n)
+beta_p <- beta + N
+negbin <- function(np, alpha, beta) {
+  1/factorial(np)*
+    beta^alpha/gamma(alpha)*
+    gamma(np + alpha)/(beta + 1)^(np + alpha)
+}
+points(ii-1, negbin(np=ii-1, alpha=alpha_p, beta=beta_p),
+       col="red")
+points(n, c(0.01,0.01), pch=8, col="red")
+legend("topright", lty=c(1,NA,NA), lwd=c(4,NA,NA),
+       col=c("skyblue","red","red"), pch=c(NA,1,8), bty="n",
+       legend=c("MCMC","calculus","data"))
+```
+
+**Answer Ex4:** By moment matching the given mean and standard deviation (12.5 and 5.2) for the informed prior distribution, I found the $\alpha$ and $\beta$ to be `r round(alpha, 2)` and `r round(beta, 2)` for the informed prior. This is gave an $\alpha$ and a $\beta$ of `r round(alpha_p, 2)` and `r round(beta_p, 2)` for the informed posterior which is plotted as the red line (calculus) in figure a). The blue line for both figure a) and b) are the results of the MCMC output of the run.jags function and agree with the expected value (calculus) well. I only changed the input for $\alpha$ and $\beta$ in the specify data code chunk, and ran the rest of the model the same. 
+
+
+
+
+
+
+
+

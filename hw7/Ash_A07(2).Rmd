@@ -1,0 +1,570 @@
+---
+title: "Ash_A07"
+author: "Jamie Ash"
+date: "due: 2021-03-06"
+output: 
+  #html_document: 
+  bookdown::html_document2:  
+    self-contained: yes
+    theme: cerulean #paper #cosmo #journal #readable
+    toc: true
+    smooth_scroll: true
+    toc_depth: 3
+    toc_float: true
+    number_sections: true
+    fig_caption: yes
+    code_folding: hide
+    # bibliography: ["geothermal.bib", "r.bib"]
+    # csl: apa-5th-edition.csl
+    # link-citations: yes
+---  
+
+<style type="text/css">  
+/* Note: CSS uses C-style commenting. */
+h1.title{font-size:22px; text-align:center;}
+h4.author{font-size:16px; text-align:center;}
+h4.date{font-size:16px; text-align:center;}
+body{ /* Normal  */ font-size: 13px}
+td {  /* Table   */ font-size: 12px}
+h1 { /* Header 1 */ font-size: 16px}
+h2 { /* Header 2 */ font-size: 14px}
+h3 { /* Header 3 */ font-size: 12px}
+.math{ font-size: 10pt;}
+.hi{ /* hanging indents */ 
+    padding-left:22px; 
+    text-indent:-22px;
+}
+blockquote {  
+    padding: 10px 20px;
+    margin: 0 0 20px;
+    font-size: 12px;
+    border-left: 5px solid #eee;
+}
+code.r{ /* code */ 
+       font-size: 12px;
+}
+pre{/*preformatted text*/ 
+    font-size: 12px;
+}
+p.caption {/* figure captions */ 
+    font-size: 1.0em;
+    font-style: italic; 
+} 
+</style>
+
+```{r setup, echo=FALSE}
+rm(list=ls()) # clean up
+
+## load packages quietly
+shhh <- suppressPackageStartupMessages # It's a library, so shhh!
+want <- c("knitr", "runjags", "coda", "MASS", "Matrix", "kableExtra",
+          "zeallot", "magrittr", "scdensity")
+for (pkg in want) shhh(library(pkg, character.only=TRUE))
+
+## set some chunk options
+gr <- (1+sqrt(5))/2 # golden ratio, for figures
+opts_chunk$set(comment="  ",
+               #echo=FALSE,
+               cache=c(TRUE, FALSE)[2], 
+               eval.after="fig.cap",
+               collapse=TRUE, 
+               dev="png",
+               fig.width=7.0,
+               out.width="95%",
+               fig.asp=0.9/gr,
+               fig.align="center"
+               )
+
+## Kruschke's utility functions (edited by NF for use in RMarkdown)
+#if (c(TRUE,FALSE)[1]) source("DBDA2E-utilities.R") 
+
+## handy function to color text
+colorize <- function(x, color) {
+  ## x is a string
+  ## example:`r colorize("The assignment", "red")`
+  if (knitr::is_latex_output()) {
+    sprintf("\\textcolor{%s}{%s}", color, x)
+  } else if (knitr::is_html_output()) {
+    sprintf("<span style='color: %s;'>%s</span>", color, x)
+  } else x
+}
+
+mypar <- # Convenience wrapper for par()
+## Values are from Bloomfield (2014) "Using R for Numerical Analysis
+## in Science and Engineering." See ?par for meanings.
+function(mgp=c(2,0.5,0), mar=c(4,4,1.5,1.5), bty="l", 
+         bg=gray(0.97), tcl=0.3, mex=0.8, cex.main=0.9,
+         font.main=1,...) 
+  par(mgp=mgp, mar=mar, bty=bty, bg=bg, tcl=tcl, mex=mex,
+      cex.main=cex.main, font.main=font.main,...) 
+
+comma <- # dynamic numbers in narrative
+  function(x) format(x, digits = 2, big.mark = ",")
+# comma(3452345) # "3,452,345"
+# comma(.12358124331) # "0.12"
+
+## fresh start? (This should not be necessary.)
+rmCache <- c(TRUE, FALSE)[2] 
+if (rmCache)
+  if (file.exists("Frazer_A05_cache")) 
+    unlink("Frazer_A05_cache", recursive=TRUE)
+```  
+
+```{r HDMIofMCMC}
+HDIofMCMC <- function( sampleVec , credMass=0.95 ) {
+  # Computes highest density interval from a sample of representative values.
+  # Arguments:
+  #   sampleVec
+  #     is a vector of representative values from a probability distribution.
+  #   credMass
+  #     is a scalar between 0 and 1, indicating the mass within the credible
+  #     interval that is to be estimated.
+  # Value:
+  #   HDIlim is a vector containing the limits of the HDI
+  # Credit: John K. Kruschke, "Doing Bayesian Data Analysis, 2nd edition"
+  sortedPts <- sort( sampleVec )
+  ciIdxInc <- # How many sample elements are in the CI?
+    ceiling( credMass * length( sortedPts ) )
+  nCIs <-     # number of possible CIs
+    length( sortedPts ) - ciIdxInc
+  ciWidth <- rep( 0 , nCIs ) # create storage
+  for ( i in 1:nCIs ) {
+    ciWidth[ i ] <- # last value in CI - first value in CI
+      sortedPts[ i + ciIdxInc ] - sortedPts[ i ]
+  } # end for
+  HDImin <- sortedPts[ which.min( ciWidth ) ]
+  HDImax <- sortedPts[ which.min( ciWidth ) + ciIdxInc ]
+  HDIlim <- c( HDImin , HDImax )
+  return( HDIlim )
+} 
+``` 
+
+\newcommand{\logit}{\mathrm{logit}}
+\newcommand{\expit}{\mathrm{expit}}
+\newcommand{\E}{\mathrm{E}}
+\newcommand{\Var}{\mathrm{Var}}
+\newcommand{\Corr}{\mathrm{Corr}}
+
+# Goals {-}   
+The goals of this assignment are: (1) Math review: domains and ranges; (2) Odds and probability---the equivalence of the reciprocal density for odds with the Haldane density for probability; (3) Using JAGS to estimate the change points in a regime change problem; (4) Convenient MCMC diagnostics using Kruschke's `diagMCMC()` function.  
+
+# Tiny tips {-}  
+
+- Can't remember the TeX word, or the math name, for a particular symbol? Go to [detexify](http://detexify.kirelabs.org/classify.html), draw the symbol and the LaTeX will appear.  
+
+- The ubiquitous chi-square distribution with $\nu$ degrees of freedom, indicated by the notations $\theta \sim \chi_\nu^2$ or $p(\theta)=\chi_\nu^2(\theta)$, is just a one-parameter gamma distribution with $\alpha=\nu/2$, $\beta=1/2$.  
+
+- In data analysis and statistics you often see the phrase "conditional independence". To see what that means consider a PDF $p(x,y|z)$. If $p(x,y|z)=p(x|z)\,p(y|z)$ then $x$ and $y$ are said to be conditionally independent given $z$. Conditional independence differs from independence, and neither one implies the other.  
+
+- One of the hardest things to get used to in coding is that the code needed to test the code you really want is often much longer than the code being tested. Professional coders take this in stride, but we amateurs must work to conquer our chagrin.   
+
+# Ex 1. Vocabulary {-}  
+(15 pts) The _domain_ of a function $f(x)$ is the set of x's on which it is defined. Thus $f(x)=x^2;\ x\gt 0$ is a different function than $f(x)=x^2;\ -\infty \lt x \lt \infty$ because the domain of the former is the positive real numbers, whereas the domain of the latter is the entire real line. The former has a well-defined inverse $f^{-1}(x)=\sqrt{x}$, whereas the latter does not. The _range_ of a function is the set of values $f(x)$ where $x$ is an element of the domain.  
+
+If $X$ is a random variable its cumulative distribution function (CDF), written $F_X(x)$ is the probability that $X$ will take a value less than or equal to $x$. Thus $F_X(x)=\Pr(X \le x)$. The Normal CDF is used so frequently that it has its own symbol, $\Phi$. Thus $\Phi(x|\mu,\sigma)=\Pr(X \le x|\mu,\sigma)$. In R, as you know, the Normal PDF is `dnorm(x, mean, sd)` and the Normal CDF is `pnorm(q, mean, sd)`.    
+
+Complete the following statements:  
+
+(a) The domain of the Normal PDF $N(x|\mu,\sigma)$ is $- \infty$ to $\infty$.  
+(b) It's range is $0$ to $\infty$. 
+(c) The domain of the Normal CDF (often denoted by $\Phi(x|\mu,\sigma)$), is $-\infty$ to $\infty$.   
+(d) Its range is 0 to 1.  
+(e) The domain of the Normal inverse CDF (quantile function), often denoted by $\Phi^{-1}(p|\mu,\sigma)$, is 0 to 1.  
+(f) Its range is 0 to $\infty$.  
+(g) The domain of the beta PDF is 0 to 1.
+(h) Its range is 0 to $\infty$. 
+(i) The domain of the beta CDF is 0 to $\infty$.
+(j) Its range is 0 to 1.
+(k) The domain of the beta inverse CDF (quantile function) is 0 to 1.
+(l) Its range is 0 to 1.  
+(m) The domain of a Poisson PMF $\Pr(y|\lambda)=e^{-\lambda}\lambda^y/y!$ is $0$ to $\infty$
+(n) Its range is the set of numbers 0 to 1. 
+
+```{r, eval= FALSE}
+pbeta(seq(-5, 10, by=0.1), shape1=0.5, shape2=0.5)
+pnorm(seq(-5, 10, by=0.1), mean=3, sd=1)
+dpois(seq(-5, 10, by=1), 2)
+dgamma(-1:10, 5, 5)
+```
+
+# Ex 2. Odds {-}  
+
+## Notation {-}  
+So that we won't have to use the proportional sign $\propto$, let's agree to denote a generic density (i.e., an _improper_ PDF), by $q$ instead of $p$. For example, if we are talking about the reciprocal density $1/r$, instead of writing $p(r)\propto 1/r$ we will just write $q(r)=1/r$.  
+
+## Review {-}  
+In Ex 2 of the previous assignment (A05) you used the posterior mean to show that the uninformative prior for the rate $r$ of a Poisson process likelihood is the reciprocal prior $1/r$. In Ex 3 of that assignment you used conservation of probability to show that $q_r(r)= 1/r$ (in the example there, $r$ was the population density of female cougars in units of cougars per km^2^) is equivalent to a reciprocal prior for $q_s(s)=1/s$ ($s=1/r$ is territory size in km^2^ per female cougar). This equivalence is sensible because a density that is uninformative for animals per km^2^ should be equally uninformative for km^2^ per animal; neither quantity is more fundamental than the other.  
+
+In Ex 1 of assignment A04 (the beta-binomial example) you used the posterior mean to show that the uniformative prior for a binomial likelihood with probability parameter $\phi$ is the Haldane density $q(\phi)=\phi^{-1}(1-\phi)^{-1}$.  
+
+In this exercise you will explore the connection between the reciprocal density and the Haldane density. To do that we need the concept of _odds._ If $\phi$ is the probability of an event, then the _odds_ (for) the event is defined as $\omega=\phi/(1-\phi)$ and the _odds-against_ is defined as $\omega_a=(1-\phi)/\phi$.  
+
+Notice that both the odds (for) and the odds-against both range from 0 to $\infty$. Neither type of odds is more fundamental or meaningful than the other, so the uninformative density for one of them should be the same as the uninformative density for the other. Moreover, they are both ratio scale quantities, so the uninformative density for both odds, and odds-against, must be the reciprocal density $q(\omega)=1/\omega;\ q(\omega_a)=1/\omega_a$. That relation is consistent with conservation of probability because $\omega_a=1/\omega$.   
+
+With all that in mind: **(a)** first show in a LaTeX derivation that  $\phi=\omega/(1+\omega)$; and then **(b)** demonstrate in LaTeX that the reciprocal density for the odds is equivalent under conservation of probability to the Haldane density for the probability. In other words, show that 
+
+$$
+q_\omega(\omega)=1/\omega \underset{\text{ CoP}}{\iff} q_\phi(\phi)=\phi^{-1}(1-\phi)^{-1}
+$$  
+Hint: Start with $q_\phi(\phi)$ on the left hand side and $q_\omega(\omega)|d\omega/d\phi|$ on the right hand side. 
+
+**Answer Ex2:** Below I show that $\phi=\omega/(1+\omega)$, then I demonstrate that the reciprocal density for the odds is equivalent under conservation of probability to the Haldane density for the probability
+
+**Answer Ex2 (a):**
+$$\begin{align}
+&\omega=\phi/(1-\phi)
+&\textrm{odds for} \\
+&\omega (1-\phi)=\phi
+&\textrm{multiply by (1-phi)} \\
+&\omega - \omega \phi=\phi
+&\textrm{multiply across} \\
+&\phi(\omega/\phi - \omega)=\phi
+&\textrm{pull out} \\
+&\omega/\phi - \omega=1
+&\textrm{divide by phi} \\
+&\omega/\phi=1 + \omega
+&\textrm{move w over} \\
+&1/\phi=(1 + \omega)/\omega
+&\textrm{multiply by 1/w} \\
+&\phi=\omega/(1 + \omega)
+&\textrm{flip it} \\
+\end{align}$$
+
+**Answer Ex2 (b):**
+$$\begin{align}
+&q_\phi(\phi) = q_\omega(\omega)|\frac{d\omega}{d\phi}| 
+&\textrm{conservation of probability} \\
+&q_\phi(\phi) = q_\omega(\omega)|\frac{d\phi/(1-\phi)}{d\phi}|
+&\textrm{substitute for w} \\
+&q_\phi(\phi) = q_\omega(\omega)|\frac{1}{(1-\phi)^2}| 
+&\textrm{take derivative} \\
+&q_\phi(\phi) = \frac{(1-\phi)}{\phi}\frac{1}{(1-\phi)^2} 
+&\textrm{substitute for w} \\
+&q_\phi(\phi) = \frac{(1-\phi)}{\phi(1-\phi)^2} 
+&\textrm{multiply fractions} \\
+&q_\phi(\phi) = \frac{1}{\phi(1-\phi)} 
+&\textrm{simplify} \\
+&q_\phi(\phi) = \phi^{-1}(1-\phi)^{-1}
+&\textrm{Haldane density} \\
+\end{align}$$ 
+# Ex 3. Change points {-}   
+(10 pts) Consider the following graph. You can see that the function being graphed is linear from 0 to 3 and from 3 to 7 and from 7 to 10.^[If you are looking at the code that made the figure, note for later use that you cannot create new functions in JAGS as easily as in R. They have to be written in C++. I am too lazy to learn C++, so I just "spell out" a function in JAGS every time I need it. The Stan language for MCMC makes it easy to create new functions, but the Stan language is a bit like C++, i.e., more difficult than JAGS to code.]  
+
+```{r t1t2t3, out.width="80%", fig.cap="A function that is piecewise linear with change points at t=3 and t=7."}
+cp <- c(3, 7)
+t <- seq(0,10,len=501)
+t1 <- pmin(t, cp[1])
+t2 <- pmin(t, cp[2]) - cp[1]
+t3 <- pmax(t, cp[2]) - cp[2]
+
+a=c(1.00, -0.25, -0.25)
+b=c(0.20,  0.15,  0.10)
+
+## Impure functions for easy correspondence with the math
+f1 <- function(t) a[1] + b[1]*t
+f2 <- function(t) a[2] + b[2]*t
+f3 <- function(t) a[3] + b[3]*t
+
+H <- function(t) as.numeric(t > 0) # step function 
+
+f <- f1(t1) + f2(t2)*H(t-cp[1]) + f3(t3)*H(t-cp[2])
+
+mypar()
+plot(t,f,type="l", ylim=c(0.7, 1.05*max(f)), 
+     xlab="", ylab="", panel.first=grid())
+xlab <- expression(italic(t))
+ylab <- expression(italic(f(t)))
+title(xlab=xlab, ylab=ylab, cex.lab=1.2)
+```  
+
+The easiest way to handle a function like this is the [cumulative indicator formulation](https://osf.io/fzqxv): Here is the equation, with the indicators on the right. Notice the convenient "change of origin" for each function.       
+
+$$
+f(t) = \left\{ \begin{array}{lcr}
+  f_1(t) &t \le \xi_1 \\
+  f_1(\xi_1) + f_2(t - \xi_1) &\xi_1 \lt t \le \xi_2  \\
+  f_1(\xi_1) + f_2(\xi_1) + f_3(t-\xi_2) &\xi_2 \lt t
+\end{array} \right.
+(\#eq:foft-3lines-a)
+$$  
+
+As a prelude to coding this, we introduce the quantities:  
+
+$$\begin{align}
+t_1&=\min(t,\xi_1)\\
+t_2&=\min(t,\xi_2) - \xi_1\\
+t_3&=\max(t,\xi_2) - \xi_2.
+\end{align}
+(\#eq:t-3lines-a)$$  
+
+We can now write equation \@ref(eq:foft-3lines-a) as
+
+$$
+f(t) = \left\{ \begin{array}{lcr}
+  f_1(t_1) &t \le \xi_1 \\
+  f_1(t_1) + f_2(t_2) &\xi_1 \lt t \le \xi_2  \\
+  f_1(t_1) + f_2(t_2) + f_3(t_3) &\xi_2 \lt t
+\end{array} 
+\right. (\#eq:foft-3lines-b)
+$$  
+However, that is still a rather awkward expression, requiring if-statements to code. To fix that situation, we make use of the step function defined by $H(t)=I(t>0)$ where $I()$ is the familiar indicator function---see A01. We can now write $f(t)$ like this^[Note for later use: you can code the $t_1,t_2,t_3$ in JAGS, and JAGS has a function called `step()`. The math $H(t-\xi_1)$ becomes `step(t[i]-cp[1])` where the change point `cp[1]` is $\xi_1$.]  
+
+$$
+f(t) = f_1(t_1) + f_2(t_2)H(t-t_1) + f_3(t_3)H(t-t_2)
+(\#eq:foft-1line)
+$$  
+
+Now here is the exercise: Show that you understand the above formulation by rewriting equations \@ref(eq:foft-3lines-a) - \@ref(eq:foft-1line), adding a third change point and fourth function.  
+
+**Answer Ex3:** Below, I've rewritten the above formulation, adding a third change point and fourth function.
+$$
+f(t) = \left\{ \begin{array}{lcr}
+  f_1(t) &t \le \xi_1 \\
+  f_1(\xi_1) + f_2(t - \xi_1) &\xi_1 \lt t \le \xi_2  \\
+  f_1(\xi_1) + f_2(\xi_2) + f_3(t-\xi_2) &\xi_2 \lt t \le \xi_3 \\
+  f_1(\xi_1) + f_2(\xi_2) + f_3(\xi_3) + f_4(t-\xi_3) &\xi_3 \lt t
+\end{array} \right.
+$$
+
+$$\begin{align}
+t_1&=\min(t,\xi_1)\\
+t_2&=\min(t,\xi_2) - \xi_1\\
+t_3&=\min(t,\xi_3) - \xi_2\\
+t_4&=\max(t,\xi_3) - \xi_3
+\end{align}$$ 
+
+$$
+f(t) = \left\{ \begin{array}{lcr}
+  f_1(t_1) &t \le \xi_1 \\
+  f_1(t_1) + f_2(t_2) &\xi_1 \lt t \le \xi_2  \\
+  f_1(t_1) + f_2(t_2) + f_3(t_3) &\xi_2 \lt t \le \xi_3 \\
+  f_1(t_1) + f_2(t_2) + f_3(t_3) + f_4(t_4) &\xi_3 \lt t
+\end{array} 
+\right. 
+$$
+
+$$
+f(t) = f_1(t_1) + f_2(t_2)H(t-\xi_1) + f_3(t_3)H(t-\xi_2) + f_4(t_4)H(t-\xi_3)
+$$  
+
+# Ex 4. MCP with JAGS  {-}  
+(45 pts) Drag and drop A05 Ex 5 to here and complete the exercise. Omit the chunk that creates function `HDIofMCMC()`. That function has been added to the R-session by sourcing `DBDA2E-utilities.R` in the setup chunk above.  
+
+**(a)** The following chunk simulates some data with change points and a mixture noise process.  
+
+```{r Ex4syndata, out.width="80%", fig.cap="Data for the change point problem. There appear to be at least two change points and several outliers."}
+set.seed(13456)
+f <- function(t, ab, i) ab[i, "a"] + t*ab[i, "b"]
+
+## intercepts and slopes
+ab <- data.frame(a=c(1, 0.25, -0.4), b=c(0.3, 0.0, -0.25))
+
+## times to sample
+t <- seq(0, 10, len=101)
+
+## change points
+cp <- c(3, 7)
+
+## the ti
+t1 <- pmin(t, cp[1])
+t2 <- pmin(t, cp[2]) - cp[1]
+t3 <- pmax(t, cp[2]) - cp[2]
+
+## the mean
+mu <- f(t1, ab, 1) + (t > cp[1])*f(t2, ab, 2) + (t > cp[2])*f(t3, ab, 3)
+
+#i=1
+#t[i]*b[1]+a[1]+(t[i]>cp[1])*(a[2]+b[2]*t[i])+(t[i]>cp[2])*(a[3]+b[3]*t[i])
+
+sd <- sample(c(0.1, 0.6), size=length(t), prob=c(9, 1), replace=TRUE)
+noise <- rnorm(length(t), mean=0, sd=sd) 
+y <- mu + noise
+
+mypar()
+xlab <- expression(italic(t))
+ylab <- expression(italic(f(t)))
+plot(t, y, type="p", pch=3, xlab="", ylab="", ylim=c(0, 3.5),  
+     panel.first=grid(), cex.lab=1.1)
+title(main="Synthetic data: f(t) and t", xlab=xlab, ylab=ylab, cex.lab=1.2)
+lines(t,mu, col='red')
+```  
+
+**(b)** In the following chunk I create a character string containing a BUGS model for use with `run.jags()`. Based on the plotted data, I decide to assume that there are only two change points, the first one less than 5 and the second one greater than 5. Therefore, among my priors will be the statements `cp[1] ~ dunif(0, 5)` and `cp[2] ~ dunif(5, 10)`. As the data are fairly noisy, with at least one obvious outlier, I will use a linear model between change points with uniform priors for the slopes and intercepts. For the (assumed additive) noise I will use a t-distribution with 3 degrees of freedom in order to accommodate the outliers.
+
+Model Creation
+```{r Ex4model}
+bug1 <- "model {
+  for (i in 1:N) {
+  mu[i] <- a[1]+b[1]*t1[i] +
+           a[2]+b[2]*t2[i] * step(t[i]-cp[1]) +
+           a[3]+b[3]*t3[i] * step(t[i]-cp[2])
+  
+  y[i] ~ dt(mu[i], tau, dof)
+  }
+  
+  cp[1] ~ dunif(1.0, 5.0)
+  cp[2] ~ dunif(5.0, 9.0)
+  a[1]  ~ dunif(-5, 5)
+  a[2]  ~ dunif(-5, 5)
+  a[3]  ~ dunif(-5, 5)
+  b[1]  ~ dunif(-5, 5)
+  b[2]  ~ dunif(-5, 5)
+  b[3]  ~ dunif(-5, 5)
+  tau   ~ dgamma(eps, eps)
+  
+  for (i in 1:N) {
+  t1[i] <- min(t[i], cp[1])
+  t2[i] <- min(t[i], cp[2]) - cp[1]
+  t3[i] <- max(t[i], cp[2]) - cp[2]  
+  }
+}"
+```
+
+sqrt(tau/3)
+Initialize Values 
+```{r, Ex4inits}
+nChains <- 3
+set.seed(1234)
+RNGs    <- c("base::Super-Duper", "base::Wichmann-Hill", 
+          "base::Marsaglia-Multicarry", "base::Mersenne-Twister")
+RNGs     <- rep(RNGs, 3) # allows up to 12 chains
+inits    <- vector("list", nChains)
+
+for (ic in 1:nChains) {
+  cp  <- c(runif(1 , 1, 5), runif(1, 5, 9))
+  a   <- c(runif(1, -5, 5), runif(1, -5, 5), runif(1, -5, 5))
+  b   <- c(runif(1, -5, 5), runif(1, -5, 5), runif(1, -5, 5))
+  #tau<- rgamma(1, shape=0.01, rate=0.01)
+  
+  inits[[ic]] <- list(cp  = cp, 
+                      a   = a,
+                      b   = b)
+  #                    tau = tau)
+  }
+``` 
+
+list of data
+```{r Ex4data}
+eps <- 0.01
+dof <- 3
+N   <- length(t)
+
+data_1 <- list(t=t,
+               y=y,
+               N=N, 
+               eps=eps,
+               dof=dof
+               )
+
+``` 
+
+run the model  
+```{r Ex4runjags}
+
+# If this crashes, type failed.jags() in the console for suggestions.
+set.seed(1200)
+burnin <- 1000
+rjo <- # S3 object of class "runjags"
+  run.jags(model = bug1,
+           silent.jags = FALSE,
+           data = data_1,
+           n.chains = 3,
+           adapt = 500,
+           burnin = burnin,
+           sample = 3000, #change this, something is making this take too long?
+           method = "parallel",
+           inits = inits,
+           modules = "glm",
+           monitor = c("cp", "a", "b", "tau") # keep samples for these variables
+          )
+
+cleanup.jags() # cleanup any failed runs  
+# #plot(rjo)    # summary plots
+``` 
+
+Plotting JAGS output
+```{r, Ex4Plot, fig.asp=0.3, fig.cap="Posterior densities of parameters in a changepoint problem with two change points. The intercept is a and the slope is b. The noise in the BUGS model was assumed to be additive from a Normal distribution with known persicion tau. The true noise, i.e., the noise used to generate the simulated data, was a mixture of normals with 90% sd=0.1 and 10% sd=0.6 - N. Frazer"}
+sams1 <- as.matrix(rjo$mcmc) # extract samples 
+## add SD as a column
+sams  <- cbind(sd=sqrt(dof/(dof-2)/sams1[,"tau"]), sams1)
+## delete the tau column
+sams  <- sams[ , colnames(sams) != "tau"] 
+med   <- {}
+names <- c("sd","a", "b")
+
+## plot prep
+mypar(mfrow=c(1, 3), tcl=-0.3, xaxs="i", yaxs="i",
+      mar=c(4, 1, 1.5, 1))
+for (nam in colnames(sams)) { # loop over variable names/plot panels
+  
+  den      <- density(sams[ , nam]) # density histogram for nam
+  ylim     <- c(0, max(den$y)) #ylimit for HPDI lines
+  med[nam] <- median(sams[ , nam]) #median
+  qs       <- HDIofMCMC(sams[ ,nam]) # 95% HPDI
+  
+  plot(den$x, den$y, type="l", lwd=1, col="black", ylim=ylim, 
+       main=paste("Posterior for", nam), 
+       xlab="", ylab="")
+  title( xlab=nam, cex.lab=1.2, line=1.8 ) 
+  abline(v=med[nam], col="red", lty=2)   ## median
+  lines(rep(qs[1], 2), c(0, ylim[2]), col="red")# 95% HPDI
+  lines(rep(qs[2], 2), c(0, ylim[2]), col="red")# 95% HPDI
+  lines(den$x, den$y) ## re-plot density on top
+  #legend("topright", bty="n", title="Posteriors", lty=c(1, 2, 1, 1), 
+  #col=c("black", "red", "red", "skyblue"), cex=0.95,  
+  #inset=c(0.03, 0.0), lwd=c(1, 1, 1, 2),
+  #legend=c("density", "median", "95% HPDI", "true"))
+}
+
+  plot(0, 0, type="n", xlim=c(0,1), ylim=c(0,1), axes=FALSE, xlab="", ylab="")
+  # text(0.5,0.5,"Put your\nlegend here")
+  legend("topright", bty="n", title="Posteriors", lty=c(1, 2, 1, 1), 
+       col=c("black", "red", "red", "skyblue"), cex=0.95,  
+       inset=c(0.03, 0.0), lwd=c(1, 1, 1, 2),
+       legend=c("density", "median", "95% HPDI", "true"))
+```  
+
+# Ex 5. Diagnostics {-}  
+(15 pts) Use Kruschke's function `diagMCMC()` to create a figure of diagnostics for `cp[1]` and `a`. Discuss. Hint: First open `DBDA2E-utilities.R` in RStudio. There are many useful functions in there, and a table of contents at the beginning to help you navigate.  
+
+```{r, Ex5Diag, eval=FALSE, fig.cap="Diagnostics for change point 1 and intercept 1, 2 and 3 created using Kruschke's function in DBDA2E-utilities.R. Included are Parameter Values, Autocorelation, Shrink factor, and densitys for each of 3 chains (blue, black and lightblue lines) from the JAGS run."}
+sams1 <- as.matrix(rjo$mcmc) # extract samples
+diagMCMC(rjo$mcmc, parName=varnames(rjo$mcmc)[1])
+
+for (i in 3:5){
+ diagMCMC(rjo$mcmc, parName=varnames(rjo$mcmc)[i]) 
+}
+```
+
+Checking results
+```{r,Ex5Results, out.width="80%", fig.cap="Ploting the simulated data (black cross hairs) overlayed by the know mean (red line) and the mean found by the BUGS-JAGS simulation (blue line)"}
+a2 <- med[4:6]
+b2 <- med[7:9]
+ab2 <- data.frame(a=c(a2[[1]], a2[[2]], a2[[3]]), b=c(b2[[1]], b2[[2]], b2[[3]]))
+
+mu2 <- f(t1, ab2, 1) + (t > med[2])*f(t2, ab2, 2) + (t > med[3])*f(t3, ab2, 3)
+
+mypar()
+xlab <- expression(italic(t))
+ylab <- expression(italic(f(t)))
+plot(t, y, type="p", pch=3, xlab="", ylab="", ylim=c(0, 3.5),  
+     panel.first=grid(), cex.lab=1.1)
+title(main="Synthetic data: f(t) and t", xlab=xlab, ylab=ylab, cex.lab=1.2)
+lines(t, mu, col='red')
+lines(t, mu2, col='blue')
+```  
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

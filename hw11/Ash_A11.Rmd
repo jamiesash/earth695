@@ -1,0 +1,687 @@
+---
+title: "Ash_A11"
+author: "Jamie Ash"
+date: "due: 2021-04-18"
+output: 
+  #html_document: 
+  bookdown::html_document2:  
+    self-contained: yes
+    theme: cerulean #paper #cosmo #journal #readable
+    toc: true
+    smooth_scroll: true
+    toc_depth: 3
+    toc_float: true
+    number_sections: true
+    fig_caption: yes
+    code_folding: hide
+    # bibliography: ["geothermal.bib", "r.bib"]
+    # csl: apa-5th-edition.csl
+    # link-citations: yes
+---  
+
+<style type="text/css">  
+/* Note: CSS uses C-style commenting. */
+h1.title{font-size:22px; text-align:center;}
+h4.author{font-size:16px; text-align:center;}
+h4.date{font-size:16px; text-align:center;}
+body{ /* Normal  */ font-size: 13px}
+td {  /* Table   */ font-size: 12px}
+h1 { /* Header 1 */ font-size: 16px}
+h2 { /* Header 2 */ font-size: 14px}
+h3 { /* Header 3 */ font-size: 12px}
+.math{ font-size: 10pt;}
+.hi{ /* hanging indents */ 
+    padding-left:22px; 
+    text-indent:-22px;
+}
+blockquote {  
+    padding: 10px 20px;
+    margin: 0 0 20px;
+    font-size: 12px;
+    border-left: 5px solid #eee;
+}
+code.r{ /* code */ 
+       font-size: 12px;
+}
+pre{/*preformatted text*/ 
+    font-size: 12px;
+}
+p.caption {/* figure captions */ 
+    font-size: 1.0em;
+    font-style: italic; 
+} 
+</style>
+
+```{r setup, echo=FALSE, message = FALSE, warning= FALSE}
+rm(list=ls()) # clean up
+
+## load packages quietly
+shhh <- suppressPackageStartupMessages # It's a library, so shhh!
+want <- c("knitr", "runjags", "coda", "MASS", "Matrix", "kableExtra",
+          "zeallot", "magrittr", "scdensity", "fMultivar", "scales")
+for (pkg in want) shhh(library(pkg, character.only=TRUE))
+#source("invgauss.R")
+
+## set some chunk options
+gr <- (1+sqrt(5))/2 # golden ratio, for figures
+opts_chunk$set(comment="  ",
+               #echo=FALSE,
+               cache=c(TRUE, FALSE)[1], 
+               eval.after="fig.cap",
+               collapse=TRUE, 
+               dev="png",
+               fig.width=7.0,
+               out.width="95%",
+               fig.asp=0.9/gr,
+               fig.align="center"
+               )
+
+## Kruschke's utility functions (edited by NF for use in RMarkdown)
+if (c(TRUE,FALSE)[1]) source("DBDA2E-utilities.R") 
+## handy function to color text
+colorize <- function(x, color) {
+  ## x is a string
+  ## example:`r colorize("The assignment", "red")`
+  if (knitr::is_latex_output()) {
+    sprintf("\\textcolor{%s}{%s}", color, x)
+  } else if (knitr::is_html_output()) {
+    sprintf("<span style='color: %s;'>%s</span>", color, x)
+  } else x
+}
+
+mypar <- # Convenience wrapper for par()
+## Values are from Bloomfield (2014) "Using R for Numerical Analysis
+## in Science and Engineering." See ?par for meanings.
+function(mgp=c(2,0.5,0), mar=c(4,4,1.5,1.5), bty="l", 
+         bg=gray(0.97), tcl=0.3, mex=0.8, cex.main=0.9,
+         font.main=1,...) 
+  par(mgp=mgp, mar=mar, bty=bty, bg=bg, tcl=tcl, mex=mex,
+      cex.main=cex.main, font.main=font.main,...) 
+
+comma <- # dynamic numbers in narrative
+  function(x) format(x, digits = 2, big.mark = ",")
+# comma(3452345) # "3,452,345"
+# comma(.12358124331) # "0.12"
+
+## fresh start? (This should not be necessary.)
+rmCache <- c(TRUE, FALSE)[2] 
+if (rmCache)
+  if (file.exists("Frazer_A08_cache")) 
+    unlink("Frazer_A08_cache", recursive=TRUE)
+```  
+
+```{r HDMIofMCMC}
+HDIofMCMC <- function( sampleVec , credMass=0.95 ) {
+  # Computes highest density interval from a sample of representative values.
+  # Arguments:
+  #   sampleVec
+  #     is a vector of representative values from a probability distribution.
+  #   credMass
+  #     is a scalar between 0 and 1, indicating the mass within the credible
+  #     interval that is to be estimated.
+  # Value:
+  #   HDIlim is a vector containing the limits of the HDI
+  # Credit: John K. Kruschke, "Doing Bayesian Data Analysis, 2nd edition"
+  sortedPts <- sort( sampleVec )
+  ciIdxInc <- # How many sample elements are in the CI?
+    ceiling( credMass * length( sortedPts ) )
+  nCIs <-     # number of possible CIs
+    length( sortedPts ) - ciIdxInc
+  ciWidth <- rep( 0 , nCIs ) # create storage
+  for ( i in 1:nCIs ) {
+    ciWidth[ i ] <- # last value in CI - first value in CI
+      sortedPts[ i + ciIdxInc ] - sortedPts[ i ]
+  } # end for
+  HDImin <- sortedPts[ which.min( ciWidth ) ]
+  HDImax <- sortedPts[ which.min( ciWidth ) + ciIdxInc ]
+  HDIlim <- c( HDImin , HDImax )
+  return( HDIlim )
+} 
+``` 
+
+\newcommand{\logit}{\mathrm{logit}}
+\newcommand{\expit}{\mathrm{expit}}
+\newcommand{\E}{\mathrm{E}}
+\newcommand{\Var}{\mathrm{Var}}
+\newcommand{\Corr}{\mathrm{Corr}}
+
+# Goals {-}   
+The goals of this assignment are: (1) Continue our study of a [quasiperiodic](https://en.wikipedia.org/wiki/Quasiperiodicity) process, the occurrence of great earthquakes on the Cascadia subduction zone (CSZ).^[You showed in A10 that the interval between events has a standard deviation equal to about half its mean, i.e., a coefficient of variation (CV) equal to 1/2. If the CV were very small, the process would be periodic, and if the CV equalled 1, it would be Poisson.] (2) Estimate the probability of a great earthquake on the CSZ in the next 50 years, by two different methods.    
+
+# Distribution parameters {-}  
+A few distributions have the mean as a parameter, but very few have the SD as a parameter. For your convenience, I have written a function `params()` that takes the mean and SD as arguments, returning the parameter values. The distributions covered are the lognormal, the exponential, the gamma, the inverse Gaussian, the uniform and the beta. It is in the file `utilities.R`, which you should have received with this assignment, but I am reproducing it here so you will have most of the formulas (of this type) that you will ever need, even if you are coding in a different computer language. When you encounter a new distribution that you need for a project, add that distribution to your version of `params()`. When speed is important and you want to minimize function calls, pull out the formulas in `params()` and use them in your code.     
+
+```{r params, eval=FALSE}
+params <-  function(dist, mn=1, sd=NULL, var=NULL) {
+  # Inputs are mn and sd, or mn and var.
+  dists <- c("exponential", "gamma", "lognormal", "invGaussian",
+             "uniform", "beta")
+  
+  ## bullet proofing
+  if (dist != "exponential") 
+    if (is.null(sd) && is.null(var)) {
+      stop("sd or var must be specified.")
+    } else { 
+      if (is.null(sd)) sd <- sqrt(var)
+    }
+  
+  if (dist == "invGaussian") { 
+    # var=mn^3*dispersion
+    dispersion <- sd^2/mn^3
+    shape  <-  1/dispersion
+    list(dispersion = dispersion, shape = shape, 
+         mode = mn*(sqrt(1 + 9*mn^2/4/shape^2) - 1.5*mn/shape))
+    
+  } else if (dist == "gamma") { 
+    # mn=shape/rate, sd=sqrt(shape)/rate
+    shape <-  mn^2/sd^2
+    rate  <-  mn/sd^2
+    list(shape = shape, rate = rate, 
+         mode = ifelse(shape >= 1, (shape-1)/rate, NA))
+    
+  } else if (dist == "lognormal") {
+    temp  <- 1 + sd^2/mn^2
+    meanlog <- log(mn/sqrt(temp))
+    sdlog   <- sqrt(log(temp))
+    list(meanlog = meanlog, sdlog = sdlog, 
+         median = exp(meanlog), mode = exp(meanlog - sdlog^2))
+    
+  } else if (dist == "exponential") {
+    # mn = sd, CoV=1
+    rate <- 1/mn
+    list(rate = rate, mode = 0, median = log(2)/rate)
+    
+  } else if (dist == "uniform") {
+    # mn=(LL+UL)/2, var=(UL-LL)^2/12
+    list(LL = mn - sqrt(3)*sd, UL = mn + sqrt(3)*sd, median = mn)
+    
+  } else if (dist == "beta") {
+    # mn = a/(a+b), mode = (a-1)/(a+b-2), conc = a+b
+    # var = mn*(mn-1)/(a+b+1)
+    var <- sd^2
+    if (var > mn*(1 - mn)) 
+      stop("Variance of beta distribution cannot exceed mn*(1-mn).")
+    temp <- mn*(1-mn)/var - 1
+    a <-   mn   * temp
+    b <- (1-mn) * temp
+    conc <- a + b # concentration
+    mode <- ifelse(a>1 & b>1, (a-1)/(a+b-2), NA)
+    list(a = a, b = b, mode = mode, conc = conc)
+  } else {
+    stop(c("dist must be one of ", dists))
+  }
+}
+```  
+
+# Tiny tips {-}  
+
+- Suppose you have updated your R and you now find, as I did recently, that a rather special package on which your code depends is not available for the newer version of R.^[During five years of steady R use, this has never happened to me before.] When I searched the web "R: How to get functions from an old package?" I was taken [here](https://stackoverflow.com/questions/23757853/get-functions-from-old-package), and the advice given there worked. I went to the familiar looking CRAN [website of the package](https://cran.r-project.org/web/packages/statmod/index.html), downloaded the tarred package source, opened it up and looked in the folder called `R` to find the source code for the inverse Gaussian functions I needed. They worked just fine, and by glancing at them I learned a useful programming trick: if you need a function, `myfun()` then write both `myfun()` and `.myfun()`. The first one checks the arguments to see whether they are sensible; if they are, it calls the second one, and if not, it throws an error. When your larger code is working fine, and argument checking is no longer needed, you call `.myfun()` instead of `myfun()`.     
+
+- The JAGS function `sum()` is observable, so you can use it to incorporate constraints. See the JAGS manual for details.  
+
+- JAGS has a function `inprod()` that you can use to calculate the inner product of two vectors. In other words, if `x` and `y` are vectors of the same length, the JAGS expression `inprod(x,y)` has the value you would get from `sum(x*y)` in R.  
+
+- The inverse Gaussian using the zeros trick is discussed in the [JagsForum](https://sourceforge.net/p/mcmc-jags/discussion/610036/thread/2040c877/), but the application is different from that of this assignment, and I did not find it especially helpful.    
+
+# IG distribution {-}  
+The [inverse Gaussian distribution](https://en.wikipedia.org/wiki/Inverse_Gaussian_distribution), also known as the _Wald distribution_ and _Brownian passage time distribution_ is the distribution of the time a [Brownian motion with positive drift](https://en.wikipedia.org/wiki/Geometric_Brownian_motion) takes to reach a fixed positive level. It is useful in the modeling of [renewal processes](https://en.wikipedia.org/wiki/Renewal_theory) because of its associated hazard function. It is parameterized by mean $\mu$ and dispersion $\phi$, or mean and shape $\lambda=1/\phi$. The standard deviation is given by $\sigma=\sqrt{\phi\mu^3}$, hence $\phi=\sigma^2/\mu^3$. The formulas for the PDF, CDF and SVF are:   
+
+$$\begin{align}
+p(t|\mu,\phi) &= 
+\frac{1}{\sqrt{2\pi\phi x^3}}
+\exp\left(-\frac{(x-\mu)^2}{2\phi\mu^2x} \right) \\
+F(t|\mu,\phi) &= 
+\Phi\left( \frac{x/\mu - 1}{\sqrt{\phi x}}  \right) + 
+\exp\left(\frac{2}{\phi\mu} \right)
+\Phi\left( -\frac{x/\mu + 1}{\sqrt{\phi x}}  \right)\\
+S(t|\mu,\phi) &= 1 - F(t|\mu,\phi)
+\end{align}$$  
+
+in which $\Phi()$ is the CDF of the standard normal, i.e. the Normal with mean=0 and SD=1. In R and JAGS, $\Phi(x)$ is available as `pnorm(x,0,1)`.    
+
+The functions `(d,p,q,r)invgauss()` are in the file `invgauss.R` which has been sent to you. The first lines of the R-code for these functions are as follows. The extra parameters of `qinvgauss()` are necessary because the quantiles are computed iteratively using Newton's method---there is no closed-form expression for them---and the user may wish to limit the number of iterations or increase the tolerance. There are other R-packages containing the IG, but these functions by Giner and Smyth (_The R Journal_, **8**:1, Aug. 2016) are the best.   
+
+```
+dinvgauss <- 
+  function(x, mean=1, shape=NULL, dispersion=1, log=FALSE)  
+pinvgauss <- 
+  function(q, mean=1, shape=NULL, dispersion=1, lower.tail=TRUE, log.p=FALSE)
+rinvgauss <- 
+  function(n, mean=1, shape=NULL, dispersion=1)
+qinvgauss  <- 
+  function(p, mean=1, shape=NULL, dispersion=1, lower.tail=TRUE, 
+           log.p=FALSE, maxit=200L, tol=1e-14, trace=FALSE)
+```  
+
+As in the previous assignment here is the turbidite data from [Goldfinger et al. (2012)](https://pubs.er.usgs.gov/publication/pp1661F).  
+
+```{r GfrTable}
+GfrTable10 <- read.csv("GoldfingerEtAl_Table10.csv")
+kable(GfrTable10, 
+        caption="Turbidite data from Goldfinger et al. (2012). 
+      Our interest here is in the means (column 2) and standard deviations 
+      (column 5) of the estimated earthquake dates. The question 
+      is whether this sequence of dates is from a Poisson process.") %>% 
+  kable_styling()
+```  
+
+# Exercise 1 {-}  
+(75 pts) This exercise is much like Ex6 of A10, except that instead of estimating the coefficient of variation (CV) to test for Poissonity, you will estimate the probability of a large earthquake on the CSZ in the next 50 years. Proceed as follows:  
+
+1. Using the means (column `MTAy`) and SDs (column `std`) of the ages in the above table, draw one set of 19 ages. Assume the errors are normally distributed.^[Use of the normal approximation carries a very small risk that the ages of two events will be reversed, causing a negative interval between them. To guard against this, `sort()` the dates before calculating the intervals.] The age samples associated with event T1 will be needed below, so save them into a vector `T1[]`.  
+
+2. Use R's `diff()` to get the 18 intervals between the sample of dates in step 1.   
+
+3. Take a single boostrap sample of the 18 intervals in step 2; i.e., sample with replacement.      
+
+4. Compute the mean and sd of the intervals from step 3.  
+
+5. Use the mean and SD from step 4 to calculate the corresponding dispersion of the inverse Gaussian (IG) distribution.  
+
+6. The last great earthquake on the CSZ was event T1, which, according to the above table, occurred `T1[i]` $\approx$ 265 years prior to 1950.^[January 1, 1950 is used as [age zero](https://en.wikipedia.org/wiki/Before_Present) in radiocarbon dating.] Given that there has not been a large earthquake on the CSZ in the last $t_1=$ `T1[i]` + 2021 - 1950 years, calculate **the probability of one or more such earthquakes in the next 50 years**. How to do that: Recall that in A10 Ex4 you (almost) showed that $\Pr(T \gt t_2 | T \gt t_1) = S(t_2)/S(t_1)$ in which $T$ is the time to the next event and $S(t)$ is the survival function. The probability needed here is therefore $1 - S(t_2)/S(t_1)$. Calculate this probability using the IG parameters from step 5. Your $t_2$ in this calculation is given by $t_2=$ `T1[i]` + 2021 - 1950 + 50 years.   
+
+7. Repeat steps 1-6 Ns times to get Ns samples of the desired probability. Remember to use `T1[i]` when you calculate the ith probability.     
+
+8. Make the usual figure showing density, median, and 95% C.I. If you elect to use `hist()` instead of `density()`, be sure to set `freq=FALSE` in the `hist()` call, so that it gives you sample density instead of sample frequency.  
+
+## Solution to Ex 1 {-}  
+
+```{r Ex1, out.width="80%", fig.cap="Probability of one or more great earthquakes on the Cascadia subduction zone in the next 50 years from bootstrapped intervals between turbidite ages."}
+Gfr10 <- read.csv("GoldfingerEtAl_Table10.csv")
+ageMn <- Gfr10$MTAy
+ageSD <- Gfr10$std
+Na    <- length(ageMn) # number of ages
+Ni    <- Na - 1          # number of intervals
+Nsam  <- 5000          # number of samples (reduce for debugging)
+T1    <- double(Nsam)    # age of most recent event
+agemn <- double(Nsam)    # mean from bootstrapped intervals
+agesd <- double(Nsam)    # SD from bootstrapped intervals 
+phi   <- double(Nsam)   # IG dispersion from bootstrapped intervals
+Pr    <- double(Nsam)
+
+set.seed(123)
+for (i in 1:Nsam) {
+  #Bootstrapping
+  ages     <- rnorm(Na, ageMn, ageSD)
+  ages     <- sort(ages) # Sort first. 
+  ints     <- diff(ages) # Find the time interval.
+  ints     <- sample(ints, size=Ni, replace=TRUE) # bootstrapped intervals
+  T1[i]    <- ages[1]   # age of most recent event, needed below
+    
+  #Parameters of the IG
+  agemn[i] <- mean(ints, na.rm=TRUE) 
+  agesd[i] <- sd(ints, na.rm=TRUE)
+  
+  phi[i]   <- (agesd[i]^2)/agemn[i]^3 #find the dispersion of the IG.
+  lam      <- 1/phi[i] # shape parameter
+  t1       <- T1[i] - 1950 + 2021 #time one
+  t2       <- T1[i] - 1950 + 2021 + 50 #time 2
+  
+  #Copying formulas from the bugs model. Could use preset IG's. Probs should
+  St2   <- 1 -             pnorm( sqrt(lam/t2)*(t2/agemn[i] - 1), 0, 1) -
+    exp(2*lam/agemn[i]) * pnorm(-sqrt(lam/t2)*(t2/agemn[i] + 1), 0, 1)
+  
+  St1   <- 1 -             pnorm( sqrt(lam/t1)*(t1/agemn[i] - 1), 0, 1) -
+    exp(2*lam/agemn[i]) * pnorm(-sqrt(lam/t1)*(t1/agemn[i] + 1), 0, 1)
+  
+  Pr[i] <- 1-St2/St1 #probability of an earthquak
+}
+
+quant  <- quantile(Pr, prob=c(0.025, 0.5, 0.975)) #confidence intervals
+
+pr <- density(Pr)
+plot(pr,
+     xlab = "Probability",
+     ylab = "Density",
+     main = "Earthquake in 50 years?")
+abline(v=quant, col="red",lwd=2, lty= c(1,2,1))
+legend("topright", bty="n", lty=c(1, 2, 1), 
+     col=c("black", "red", "red"), cex=0.95,  
+     inset=c(0.03, 0.0), lwd=c(1, 1, 2),
+     legend=c("density", "median", "95% CI"))
+
+#hist(Pr, breaks=30, freq=FALSE)
+#abline(v=quant, col="blue",lwd=2)
+#(more code)
+```  
+**Narrative Ex1:** I found the probability of one or more great earthquakes on the Cascadia subduction occurring within the next 50 years to be around `r round(mean(Pr), 4) * 100`%. For the survival equations I used what was provided in the bugs1 model. 
+  
+# Exercise 2 {-}  
+(75 pts) Here you use JAGS to solve the problem of the previous exercise. The inverse Gaussian (IG) distribution is not included in JAGS so use the Bernoulli ones trick. Here is a simple BUGS model (`bug1`) to get you started. `bug1` assumes that the intervals and the time, $t_1$, since the last event have no error, and it wants them as data. You will need to create a better model (call it `bug2`) that uses the ages and their standard deviations as data. Remember to include the `ones[]` and the `one` in the data.            
+
+## Solution to Ex2 {-} 
+Set the data
+```{r data}
+ages  <- Gfr10$MTAy
+int   <- diff(ages) # Find the time interval.
+ageSD <- Gfr10$std
+
+Del  <- 50
+t1   <- mean(T1) - 1950 + 2021 #I need t1 and t2
+t2   <- t1 + Del
+ones <- rep(1, length(int))
+
+data_1 <- list(int  = int, #intervals put here
+               t1   = t1,
+               t2   = t2, 
+               ones = ones,
+               one  = 1,
+               one2  = 1)
+
+data_2 <- list(ones  = ones,
+               Ao    = Gfr10$MTAy,
+               ageMn = Gfr10$MTAy,
+               ageSD = Gfr10$std,
+               Del   = 50, 
+               one   = 1)
+```
+
+Initialize Values 
+```{r, Initialize}
+nChains <- 3
+set.seed(1234)
+RNGs   <- c("base::Super-Duper", "base::Wichmann-Hill", 
+          "base::Marsaglia-Multicarry", "base::Mersenne-Twister")
+RNGs   <- rep(RNGs, 3) # allows up to 12 chains
+inits  <- vector("list", nChains)
+inits2 <- vector("list", nChains)
+inits3 <- vector("list", nChains)
+
+for (ic in 1:nChains) {
+  
+  # priors for inits 1. Using Int as data, runif works here as well
+  dog <- sample(int, size = length(int), replace=TRUE)
+  mu  <- mean(dog) #runif works here as well
+  sds <- sd(dog)   #runif works here as well
+  
+  # priors for inits 2
+  mu2  <- runif(1, 0, 600)
+  sds2 <- runif(1, 0, 600)
+  
+  #priors for inits 3
+  A <- double(19)
+  for (i in 1:length(ageMn)){
+    A[i] <- runif(1, ageMn[i]-ageSD[i]/2, ageMn[i]+ageSD[i]/2)
+  }
+  B    <- diff(A) #runif works here as well
+  mu3  <- mean(B) #runif works here as well
+  sds3 <- sd(B)
+  
+  inits[[ic]] <- list(mu  = mu, 
+                      sds = sds)
+  
+  inits2[[ic]] <- list(mu  = mu2,
+                       sds = sds2)
+  
+  inits3[[ic]] <- list(mu  = mu3,
+                       sds = sds3, 
+                       A   = A)
+  
+  }
+``` 
+
+BUGS Model
+```{r model}
+bug1 <- " model {
+## Observe the interval data, int[i]
+for (i in 1:length(int)) {
+  dog[i] <- (1/sqrt( 6.283185*phi*int[i]^3)) *
+            exp( -(int[i]-mu)^2 / (2*phi*mu^2*int[i]) ) / 100
+  ones[i] ~ dbern(dog[i])
+}
+
+## prediction 
+phi <- (sds^2)/(mu^3)
+lam <- 1/phi # shape parameter
+
+St1 <- 1 -                pnorm( sqrt(lam/t1)*(t1/mu - 1), 0, 1) -
+           exp(2*lam/mu) * pnorm(-sqrt(lam/t1)*(t1/mu + 1), 0, 1)
+one  ~ dbern(St1)
+
+St2 <- 1 -                pnorm( sqrt(lam/t2)*(t2/mu - 1), 0, 1) -
+           exp(2*lam/mu) * pnorm(-sqrt(lam/t2)*(t2/mu + 1), 0, 1)
+one2  ~ dbern(St2)
+
+Pr1 <- 1-St2/St1 
+
+## priors
+mu  ~ dgamma(0.01, 0.01)
+sds ~ dgamma(0.01, 0.01)
+}
+"
+
+bug2 <- " model {
+## Observe the interval data
+for (i in 1:18) {
+  dog[i] <- (1/sqrt( 6.283185*phi*int[i]^3)) *
+            exp( -(int[i]-mu)^2 / (2*phi*mu^2*int[i]) ) / 100
+  ones[i] ~ dbern(dog[i])
+}
+
+int <- Ao[2:19] - Ao[1:18]
+
+for (i in 1:19){
+  Ao[i] ~ dnorm(B[i], 1/ageSD[i]^2)
+}
+
+## prediction 
+phi <- (sds^2)/(mu^3)
+lam <- 1/phi # shape parameter
+
+t1 <- Ao[1] - 1950 + 2021 
+t2 <- t1 + Del
+
+St1 <- 1 -                pnorm( sqrt(lam/t1)*(t1/mu - 1), 0, 1) -
+           exp(2*lam/mu) * pnorm(-sqrt(lam/t1)*(t1/mu + 1), 0, 1)
+one  ~ dbern(St1)
+
+St2 <- 1 -                pnorm( sqrt(lam/t2)*(t2/mu - 1), 0, 1) -
+           exp(2*lam/mu) * pnorm(-sqrt(lam/t2)*(t2/mu + 1), 0, 1)
+           
+Pr2 <- 1-St2/St1 
+
+## priors
+mu  ~ dgamma(0.01, 0.01)
+sds ~ dgamma(0.01, 0.01)
+
+# Prior for true age, A, of earthquakes. Sorted to create B. 
+for (i in 1:19){
+  A[i] ~ dunif(min(ageMn)-ageSD[1]*3, max(ageMn)+ageSD[19]*3)
+}
+B <- sort(A)
+}
+"
+
+bug3 <- " model {
+
+## Observe the interval data
+for (i in 1:18) {
+  dog[i] <- (1/sqrt( 6.283185*phi*int[i]^3)) *
+            exp( -(int[i]-mu)^2 / (2*phi*mu^2*int[i]) ) / 100
+  ones[i] ~ dbern(dog[i])
+}
+
+int <- Ao[2:19] - Ao[1:18]
+
+for (i in 1:19){
+  Ao[i] ~ dnorm(A[i], 1/ageSD[i]^2)
+}
+
+## prediction 
+phi <- (sds^2)/(mu^3)
+lam <- 1/phi # shape parameter
+
+t1 <- Ao[1] - 1950 + 2021 
+t2 <- t1 + Del
+
+St1 <- 1 -                pnorm( sqrt(lam/t1)*(t1/mu - 1), 0, 1) -
+           exp(2*lam/mu) * pnorm(-sqrt(lam/t1)*(t1/mu + 1), 0, 1)
+one  ~ dbern(St1)
+
+St2 <- 1 -                pnorm( sqrt(lam/t2)*(t2/mu - 1), 0, 1) -
+           exp(2*lam/mu) * pnorm(-sqrt(lam/t2)*(t2/mu + 1), 0, 1)
+#one2  ~ dbern(St2)
+
+Pr3 <- 1-St2/St1 
+
+## priors
+mu  ~ dgamma(0.01, 0.01)
+sds ~ dgamma(0.01, 0.01)
+
+# Prior for true age, A, of earthquakes. Sorted to create B. 
+for (i in 1:(length(ageMn))){
+  A[i] ~ dunif(ageMn[i]-ageSD[i]/2, ageMn[i]+ageSD[i]/2)
+}
+}
+"
+```  
+
+Run JAGS
+```{r runjags}
+
+# If this crashes, type failed.jags() in the console for suggestions.
+set.seed(1200)
+burnin <- 1000
+rjo1 <- # S3 object of class "runjags"
+  run.jags(model = bug1,
+           silent.jags = TRUE,
+           data = data_1,
+           n.chains = 3,
+           adapt = 500,
+           burnin = burnin,
+           sample = 3000, 
+           method = "parallel",
+           inits = inits, 
+           modules = "glm",
+           monitor = c("Pr1") # keep samples for these variables
+          )
+
+cleanup.jags() # cleanup any failed runs  
+
+rjo2 <- # S3 object of class "runjags"
+  run.jags(model = bug3,
+           silent.jags = TRUE,
+           data = data_2,
+           n.chains = 3,
+           adapt = 500,
+           burnin = burnin,
+           sample = 3000, 
+           method = "parallel",
+           inits = inits3, 
+           modules = "glm",
+           monitor = c("Pr3") # keep samples for these variables
+          )
+
+cleanup.jags() # cleanup any failed runs  
+#plot(rjo)    # summary plots
+``` 
+
+Plot JAGS output
+```{r, PlotJags, out.width="100%", fig.asp=1, fig.cap="Posterior densities of parameters in an Inverse Gaussian problem. The probability is Pr."}
+sams <- as.matrix(rjo1$mcmc) # extract samples 
+## delete the tau column
+med   <- {}
+names <- c("Pr", "mu", "sds")
+
+## plot prep
+mypar(mfrow=c(2, 1), tcl=-0.3, xaxs="i", yaxs="i")
+for (nam in colnames(sams)) { # loop over variable names/plot panels
+  
+  den      <- density(sams[ , nam]) # density histogram for nam
+  ylim     <- c(0, max(den$y)) #ylimit for HPDI lines
+  med[nam] <- median(sams[ , nam]) #median
+  qs       <- HDIofMCMC(sams[ ,nam]) # 95% HPDI
+  
+  plot(den$x, den$y, 
+       type="l", 
+       lwd=1, 
+       col="black", 
+       ylim=ylim, 
+       xlim = c(0.07,0.25),
+       main=paste("Posterior for", "Pr with Interval as Data"), 
+       xlab="", 
+       ylab="Density")
+  title(xlab=nam, cex.lab=1.2, line=1.8 ) 
+  abline(v=med[nam], col="red", lty=2)   ## median
+  lines(rep(qs[1], 2), c(0, ylim[2]), col="red")# 95% HPDI
+  lines(rep(qs[2], 2), c(0, ylim[2]), col="red")# 95% HPDI
+  lines(den$x, den$y) ## re-plot density on top
+}
+
+legend("topright", bty="n", title="Posteriors", lty=c(1, 2, 1), 
+     col=c("black", "red", "red"), cex=0.95,  
+     inset=c(0.03, 0.0), lwd=c(1, 1, 2),
+     legend=c("density", "median", "95% HPDI"))
+
+
+####################### UGLY CODE ##################################
+
+sams <- as.matrix(rjo2$mcmc) # extract samples 
+med   <- {}
+names <- c("Pr")
+## plot prep
+for (nam in colnames(sams)) { # loop over variable names/plot panels
+  
+  den      <- density(sams[ , nam]) # density histogram for nam
+  ylim     <- c(0, max(den$y)) #ylimit for HPDI lines
+  med[nam] <- median(sams[ , nam]) #median
+  qs       <- HDIofMCMC(sams[ ,nam]) # 95% HPDI
+  
+  plot(den$x, den$y, 
+       type="l", 
+       lwd=1, 
+       col="black", 
+       ylim=ylim, 
+       xlim = c(0.07,0.25),
+       main=paste("Posterior for", "Pr without Interval as Data"), 
+       xlab="", 
+       ylab="Density")
+  title( xlab=nam, cex.lab=1.2, line=1.8 ) 
+  abline(v=med[nam], col="red", lty=2)   ## median
+  lines(rep(qs[1], 2), c(0, ylim[2]), col="red")# 95% HPDI
+  lines(rep(qs[2], 2), c(0, ylim[2]), col="red")# 95% HPDI
+  lines(den$x, den$y) ## re-plot density on top
+}
+
+legend("topright", bty="n", title="Posteriors", lty=c(1, 2, 1), 
+     col=c("black", "red", "red"), cex=0.95,  
+     inset=c(0.03, 0.0), lwd=c(1, 1, 2),
+     legend=c("density", "median", "95% HPDI"))
+``` 
+JAGS Diagnostics
+```{r, Diag, fig.cap="Diagnostics for Probability of one or more great earthquakes on the Cascadia subduction zone in the next 50 years created using Kruschke's function in DBDA2E-utilities.R. Included are Parameter Values, Autocorelation, Shrink factor, and densitys for each of 3 chains (blue, black and lightblue lines) from the JAGS run."}
+diagMCMC(rjo1$mcmc, parName=varnames(rjo1$mcmc)[1])
+
+diagMCMC(rjo2$mcmc, parName=varnames(rjo2$mcmc)[1])
+```
+
+**Narrative Ex2** I found the probability of one or more great earthquakes on the Cascadia subduction occurring within the next 50 years to be around `r round(mean(sams), 2)` for both bugs models using the intervals as data and as unknowns. This is about 3% greater than the probability found using bootstraping `r round(mean(Pr), 2)*100`. Pr1 is the probability determined using bugs1 model, and Pr3 is from the bugs3 model (bugs3 and bugs2 are very similar). 
+
+**Inits as data :** I started by getting the simpler BUGS model that was supplied with the assignment to run. I changed that code by setting the mean and standard deviation of the time intervals, `sds` and `mu`, with gamma priors and finding `phi` deterministically rather than using a dgamma() prior for `phi`. I was unable to get JAGS to accept `rgamma` to initialize `mu` and `sds`, but could get JAGS running by initializing them using the uniform distribution , `runif(1, 0, 1000)`. I think rgamma(1, 0.01, 0.01) tends to generate values too small for initial `mu` and `sd` (center of mass less than 1). I ended up initializing `mu` and `phi` by taking a single bootstrap sample of the observed time intervals and finding the mean and sd of that for each chain. This is about as informed as it gets, but the less informative runiff(1, 0 , 1000) worked as well. 
+
+**Inits as unknowns:** I did as prof Neil suggested and set the observed time intervals, `Ao` as pulls from a normal distribution with a mean of the true time stamps, `A`, and an sd of the observed time stamps, `ageSD`. I used variables similar to what was shown during class to make it easier to follow. I set `A[1:19]` using a uniform distribution around each time stamp, `Ao[1:19]`, with a spread smaller than the sd of each time measurement, `Ao` (smaller than sd to reduce the risk of overlapping time intervals). I originally set `A` using 19 pulls from a uniform distribution with the spread set using the min and max of the observed time stamps with a little added wiggle room `A[i] ~ dunif(min(ageMn)-ageSD[1]*2, max(ageMn)+ageSD[1]*2)`, then sorting `A` into `B`. This worked as well and is seen in the bugs2 model, which runs but I don't display the results.    
+
+**Summary of different bugs: ** Above, I display results and diagnostics from my bugs1 and bugs3 models. Below I summarize bugs1, bugs2 and bugs3 models.  
+
+bugs1: Time intervals are set as data. `sd` and `mu` have gamma priors and initial values set using bootstrap samples of the measured interval time stamps. Using uniform priors works here as well.     
+
+bug2: Again, time intervals are calculated deterministically in the model using the time data set as pulls from a normal distribution. The mean of that normal distribution (for `Ao`) is `A[1:19]`, and found by pulling 19 values from a uniform distribution with a range of `Ao` like `A[i] ~ dunif(min(ageMn)-ageSD[1]*2, max(ageMn)+ageSD[1]*2)`, then sorting it.  I don't initialize `A`, but do initialize `mu` and `sd` using the uniform distribution. Again, t1 and t2 are calculated deterministically using the observation `Ao[1]` and `Del`.  
+bugs3: Time intervals are calculated deterministically in the model using the time data set as pulls from a normal distribution. The mean of that normal distribution, `A[1:19]`, is a pull from a uniform distribution around the measured time stamps ex. `A[i] ~ dunif(ageMn[i]-ageSD[i]/2, ageMn[i]+ageSD[i]/2)`. I initialize `A` the same way only using runif() instead of dunif(), but found the model still runs without initializing `A`. I initialized `mu`, and `sd` using the initialized time stamps `A` interval mean and standard deviation. I found using runif(1, 0, 1000) for both `mu` and `sds` works here as well, but rgamma(1, 0.01, 0.01) did not.   
+
+**Things I haven't done:** I gave an honest effort at initializing `sds` and `mu` using the the rgamma(1, 0.01, 0.01) function rather than an uniform distribution, runif(1, 0, 1000) or finding them determiniticly. And setting the time stamps using a uniform distribution as suggested in the resources forum on Slack. Pretty much once the model was written it was a matter of getting good initial values to get JAGS working.  
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

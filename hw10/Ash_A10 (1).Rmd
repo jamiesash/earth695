@@ -1,0 +1,549 @@
+---
+title: "Ash_A10"
+author: "Jamie Ash"
+date: "due: 2020-04-10"
+output: 
+  #html_document: 
+  bookdown::html_document2:  
+    self-contained: yes
+    theme: cerulean #paper #cosmo #journal #readable
+    toc: true
+    smooth_scroll: true
+    toc_depth: 3
+    toc_float: true
+    number_sections: true
+    fig_caption: yes
+    code_folding: hide
+    # bibliography: ["geothermal.bib", "r.bib"]
+    # csl: apa-5th-edition.csl
+    # link-citations: yes
+---  
+
+<style type="text/css">  
+/* Note: CSS uses C-style commenting. */
+h1.title{font-size:22px; text-align:center;}
+h4.author{font-size:16px; text-align:center;}
+h4.date{font-size:16px; text-align:center;}
+body{ /* Normal  */ font-size: 13px}
+td {  /* Table   */ font-size: 12px}
+h1 { /* Header 1 */ font-size: 16px}
+h2 { /* Header 2 */ font-size: 14px}
+h3 { /* Header 3 */ font-size: 12px}
+.math{ font-size: 10pt;}
+.hi{ /* hanging indents */ 
+    padding-left:22px; 
+    text-indent:-22px;
+}
+blockquote {  
+    padding: 10px 20px;
+    margin: 0 0 20px;
+    font-size: 12px;
+    border-left: 5px solid #eee;
+}
+code.r{ /* code */ 
+       font-size: 12px;
+}
+pre{/*preformatted text*/ 
+    font-size: 12px;
+}
+p.caption {/* figure captions */ 
+    font-size: 1.0em;
+    font-style: italic; 
+} 
+</style>
+
+```{r setup, echo=FALSE}
+rm(list=ls()) # clean up
+
+## load packages quietly
+shhh <- suppressPackageStartupMessages # It's a library, so shhh!
+want <- c("knitr", "runjags", "coda", "MASS", "Matrix", "kableExtra",
+          "zeallot", "magrittr", "scdensity", "fMultivar", "scales")
+for (pkg in want) shhh(library(pkg, character.only=TRUE))
+
+## set some chunk options
+gr <- (1+sqrt(5))/2 # golden ratio, for figures
+opts_chunk$set(comment="  ",
+               #echo=FALSE,
+               cache=c(TRUE, FALSE)[2], 
+               eval.after="fig.cap",
+               collapse=TRUE, 
+               dev="png",
+               fig.width=7.0,
+               out.width="95%",
+               fig.asp=0.9/gr,
+               fig.align="center"
+               )
+
+## Kruschke's utility functions (edited by NF for use in RMarkdown)
+if (c(TRUE,FALSE)[2]) source("DBDA2E-utilities.R") 
+
+## handy function to color text
+colorize <- function(x, color) {
+  ## x is a string
+  ## example:`r colorize("The assignment", "red")`
+  if (knitr::is_latex_output()) {
+    sprintf("\\textcolor{%s}{%s}", color, x)
+  } else if (knitr::is_html_output()) {
+    sprintf("<span style='color: %s;'>%s</span>", color, x)
+  } else x
+}
+
+mypar <- # Convenience wrapper for par()
+## Values are from Bloomfield (2014) "Using R for Numerical Analysis
+## in Science and Engineering." See ?par for meanings.
+function(mgp=c(2,0.5,0), mar=c(4,4,1.5,1.5), bty="l", 
+         bg=gray(0.97), tcl=0.3, mex=0.8, cex.main=0.9,
+         font.main=1,...) 
+  par(mgp=mgp, mar=mar, bty=bty, bg=bg, tcl=tcl, mex=mex,
+      cex.main=cex.main, font.main=font.main,...) 
+
+comma <- # dynamic numbers in narrative
+  function(x) format(x, digits = 2, big.mark = ",")
+# comma(3452345) # "3,452,345"
+# comma(.12358124331) # "0.12"
+
+## fresh start? (This should not be necessary.)
+rmCache <- c(TRUE, FALSE)[2] 
+if (rmCache)
+  if (file.exists("Frazer_A10_cache")) 
+    unlink("Frazer_A10_cache", recursive=TRUE)
+```  
+
+\newcommand{\logit}{\mathrm{logit}}
+\newcommand{\expit}{\mathrm{expit}}
+\newcommand{\E}{\mathrm{E}}
+\newcommand{\Var}{\mathrm{Var}}
+\newcommand{\Corr}{\mathrm{Corr}}
+
+# Goals {-}   
+The goals of this assignment are: (1) Introduce the survival and hazard functions. (2) Practice graphing with two y-axes. (3) Study the Poisson process and test for it. (4) Learn how to create a new distribution in JAGS using the Poisson zeros trick or the Bernoulli ones trick---they do the same thing.  
+
+# Tiny tips {-}  
+
+- Environments: The following is a quote from Section 8.1 of "Advanced R, 2nd Edition" by Hadley Wickham:  
+
+    "The job of an environment is to associate or **bind** a set of names to a set of values. You can think of an environment as a bag of names. Each name points to an object stored elsewhere in memory. The objects don't live in the environment so multiple names can point to the same object. Confusingly, they can also point to different objects that happen to have the same value. If an object has no names pointing to it, it gets automatically delected by the _garbage collector._ Every environment has a parent, another environment."  
+    
+- When a function is called a new environment is created, called the _function environment._ Suppose the call is `f(x=x*y, a=13)`. The value 13 is created in memory and bound to the name `a` in the function environment. The expression `x*y` is evaluated in the calling environment and bound to the name `x` in the function environment. The value of `x` in the calling environment is not affected.   
+
+- There are four ways to run JAGS from R or from an RMarkdown document: **(1)** Use `bash` chunks to call JAGS directly; in this method you write your model, data and commands to files which JAGS reads; JAGS writes its output to a file, and you read that file; it sounds complicated, but it's not; I've done it several times; see Chapter 5 of the JAGS manual for instructions. **(2)** Use the [rjags package](https://cran.r-project.org/web/packages/rjags/rjags.pdf) written by Martyn Plummer, the author of JAGS. **(3)** Use the [runjags package](https://cran.r-project.org/web/packages/runjags/vignettes/UserGuide.pdf) that we have been using, written by Matt Denwood and Martyn Plummer. **(4)** Use the [r2jags package](https://cran.r-project.org/web/packages/R2jags/R2jags.pdf) written by Yu-Sung Su and Masanao Yajima.  
+
+- The rjags, runjags and r2jags packages are all discussed in Chapter 4 of the [JAGS User Manual](https://people.stat.sc.edu/hansont/stat740/jags_user_manual.pdf). All three packages use diagnostic routines from the [coda package](https://cran.r-project.org/web/packages/coda/coda.pdf), to analyze the samples, but you can call those diagnostic functions directly if you want. The three packages (rjags, runjags and r2jags) are fairly similar, so if somebody gives you a code that uses the rjags package, or the r2jags package, your experience here with the runjags package should enable you to understand it rather quickly.  
+
+- If a variable in a computer program has units, indicate them in a comment. For example, instead of coding `A <- 10`, code `A <- 10 # km^2`. This makes it easier to share code with others, including future you, and it is the mark of a good scientist. Carelessness with units causes big disasters, such as the $125M loss of the [Mars Climate Orbiter](https://en.wikipedia.org/wiki/Mars_Climate_Orbiter), and quotidien sadness, as when a friend is struggling with code that gives wrong answers, and you find it difficult to help them because of statements like `v = 10*[1 1];%drift rate`.      
+
+- A _displayed equation_ is one that is set apart from the narrative rather than embedded in it. I have sometimes encountered flaky behavior when using the double dollar signs to display an equation. For example, this  
+
+```
+$$  
+a = 2 \\
+
+b = 3.
+$$ 
+```
+
+results in this,
+
+$$  
+a = 2 \\
+
+b = 3.
+$$  
+
+but this  
+```
+\begin{equation}  
+a = 2 \\
+
+b = 3,
+\end{equation} 
+```  
+
+results in this:  
+
+\begin{equation}  
+a = 2 \\
+
+b = 3,
+\end{equation}
+
+# Survival {-}  
+
+This is one of those situations where a more precise notation is worth the trouble. Let $T$ be length of life. Then $p_T(t)\Delta t$ is the probability that $t\lt T\le t+\Delta t$, i.e., the probability of dying between time $t$ and $t + \Delta t$ given that one was born at time 0. The CDF $F_T(t)$ is the probability of dying before or at time $t$. The **survival function** $S_T(t)=1-F_T(t)$ is the probability of dying at a time later than $t$, i.e., the probability of surviving to age $t$. It is sometimes referred to as the complementary cumulative distribution function (CCDF), and in engineering it is called the reliability function.     
+
+# Hazard {-}  
+Hazard $h(t)$ is a density such that $h(t)\Delta t$ is the probability of dying in the time interval $t, t+\Delta t$ **given** that one has survived to time $t$. Note that this is different than the simple probability of dying in $t, t+\Delta t$ because we have added information---you lived to time $t$. Writing $T$ for age at death, as above, and using the product rule in its quotient form, $\Pr(A|B)=\Pr(A,B)/\Pr(B)$, we may write   
+
+$$\begin{align}
+h(t) \Delta t 
+&= \Pr(t\lt T\le t+\Delta t | T\gt t)\\
+&= \Pr(t\lt T\le t+\Delta t ,T\gt t)/\Pr(T\gt t)\\
+&= \Pr(t\lt T\le t+\Delta t)/\Pr(T\gt t)\\
+&= p_T(t)\Delta t/\Pr(T \gt t)\\
+\end{align}$$  
+
+Therefore $h(t)=p(t)/S(t)$. At first glance, the above derivation looks like trickery, so let's dissect it. A is the statement $t\lt T\le t+\Delta t$, and B is the statement $T\gt t$. If A is true then B is guaranteed. (If A and B were sets we would say that A is a subset of B.) Therefore $\Pr(A,B)=\Pr(A)$.  
+
+# Exercise 1 {-}  
+(10 pts) The following figure shows the CDF and PDF of a gamma distribution. In the code for the figure, notice how the scale factor `sf` is used twice. Make a second figure that also includes the survival function (call it `sv` in your code) and hazard (call it `hz` in your code) plotted using the left y-axis. Change the caption and legend as appropriate. **Question:** In the `axis()` call, why is the argument `at` specified with a `<-` rather than a `=`? Hint: change `<-` to `=` and see what happens.  
+
+```{r CDF, out.width="80%", fig.cap="CDF (left axis) and PDF (right axis) of a gamma distribution with mean = 50 years and SD = 12 years."}
+mypar(xaxs="i", yaxs="i", mar=c(4,4,1,4))
+tt <- seq(0, 100, len=301)
+mn <- 50; sd <- 12
+sh <- mn^2/sd^2; rt <- mn/sd^2
+pd <- dgamma(tt, shape=sh, rate=rt) # PDF
+cd <- pgamma(tt, shape=sh, rate=rt) # CDF
+cols <- c("black", "blue")
+plot(tt, cd, # CDF
+     type="l", ylim=c(0.0, 1.05), panel.first=grid(),
+     xlab="time (years)", ylab="CDF", bty="u", col=cols[1])
+sf <- 20 # scale factor for PDF
+lines(tt, sf*pd, col=cols[2]) # PDF
+axis(4, at <- seq(0, 1, 0.2), labels=at/sf, col=cols[2],
+     col.ticks=cols[2], col.axis=cols[2])
+mtext(text="PDF", side=4, line=2, col=cols[2])
+legend("left", lty=c(1,1), col=cols, inset=c(0.05, 0), 
+       legend=c("CDF", "PDF"))
+```  
+
+## Ex 1 solution {-}
+(Put your augmented figure here. Keep the PDF and CDF, but add the survival and hazard.)  
+
+```{r Ex1Solution, out.width="80%", fig.cap="Survival Curve (left axis) and Hazard curve (right axis) froma a gamma distribution with mean = 50 years and SD = 12 years."}
+tt <- seq(0, 101, len=301)
+mn <- 50; sd <- 12
+sh <- mn^2/sd^2; rt <- mn/sd^2
+pd <- dgamma(tt, shape=sh, rate=rt) # PDF
+cd <- pgamma(tt, shape=sh, rate=rt) # CDF
+sv <- 1 - cd
+hz <- pd/sv
+
+
+
+mypar(xaxs="i", yaxs="i", mar=c(4,4,1,4))
+tt <- seq(0, 100, len=301)
+
+mn <- 50; sd <- 12
+sh <- mn^2/sd^2; rt <- mn/sd^2
+pd <- dgamma(tt, shape=sh, rate=rt) # PDF
+cd <- pgamma(tt, shape=sh, rate=rt) # CDF
+cols <- c("black", "grey69", "grey20", "blue")
+plot(tt, cd, # CDF
+     type="l", ylim=c(0.0, 1.05), panel.first=grid(),
+     xlab="time (years)", ylab="CDF", bty="u", col=cols[1])
+sf <- 20 # scale factor for PDF
+lines(tt, sf*pd, col=cols[4]) # PDF
+lines(tt, sv, col=cols[1]) # PDF
+lines(tt, hz, col=cols[1]) # PDF
+axis(4, at <- seq(0, 1, 0.2), labels=at/sf, col=cols[4],
+     col.ticks=cols[2], col.axis=cols[4])
+mtext(text="PDF", side=4, line=2, col=cols[4])
+legend("left", lty=c(1,1), col=cols, inset=c(0.05, 0), 
+       legend=c("CDF", "PDF", "Survival", "Hazard"))
+
+mypar(xaxs="i", yaxs="i", mar=c(4,4,1,4))
+plot(tt, sv, # CDF
+     type="l", 
+     ylim=c(0.0, 1.2), panel.first=grid(),
+     xlab="time (years)", 
+     ylab="CDF", 
+     main="at <- seq(0, 1.2, 0.2)",
+     bty="u", 
+     col=cols[1])
+
+sf <- 5 # scale factor for PDF
+lines(tt, sf*hz, col=cols[4]) # PDF
+axis(4, at <- seq(0, 1.2, 0.2), labels=at/sf, col=cols[4],
+     col.ticks=cols[2], col.axis=cols[4])
+mtext(text="PDF", side=4, line=2, col=cols[4])
+legend("left", lty=c(1,1), col=cols, inset=c(0.05, 0), 
+       legend=c("Survival", "Hazard"))
+```  
+**Answer:** I've plotted both of the here for reference, that's one with just the hazard and survival curves and one with all the curves. When I use the = for `at = seq()` in the axes call I receive the error **Errpr 'at' and 'labels' lengths differ, 7 != 6**. I've had issues before with discrepancy between `<-` and `=` when assigning variables using the `list()` function. 
+
+# Exercise 2 {-}  
+(10 pts) (Exponential distribution) Consider the exponential distribution with PDF $p_T(t)=re^{-rt}$. Give **(a)** its mean, **(b)** its variance, **(c)** its CDF $F_T(t)$, **(d)** its SVF $S_T(t)$, and **(e)** its HZF $h_T(t)$. The exponential distribution is a special case of a **(f)** (What?) distribution with unit **(g)** (what?) parameter.    
+
+## Solution to Ex 2 {-}  
+(Put your narrative here.)  
+**(a)** The mean of the gamma distribution is $ \mu= 1/ \lambda $ where $\lambda = r$
+**(b)** the variance of the gamma distribution is $ \alpha^2=(1/ \lambda)^2$
+**(c)** the CDF of the gamma distribution is $F_T(t)=1-e^{-rt}$
+**(d)** the SVF of the gamma distribution is $S_T(t)=1-(1-e^{-rt}) = e^{-rt}$
+**(e)** the HZF of a gamma distribution is the pdf/svf or $h_T(t)=re^{-rt}/e^{-rt} => r$
+**(f)** the exponential distribution is a special case of a gamma distribution with unit **(g)** constant rate ($\lambda$) parameter
+
+# Exercise 3 {-}  
+(10 pts) Make a figure analogous to the one in Ex 2, but using the exponential distribution with mean = 50 years. Do not use the R-supplied functions `dexp()`, and `pexp()`. Make the color of the right y-axis black this time; it's the default color for `axis()`, so you can omit the color fandango in the `axis()` call used above. Plot the CDF and SVF on the left y-axis and the PDF and HZF on the right y-axis. Use `sf=20` as your scale factor for the functions plotted on the right y-axis.  
+
+## Solution to Ex 3 {-}  
+```{r Ex3Solution, out.width="80%", fig.cap="Survival Curve (left axis) and Hazard curve (right axis) froma an exponential distribution with mean = 50 years."}
+tt <- seq(0, 150, len=301)
+mn <- 50
+sh <- (1/mn)^2
+rt <- 1/mn #does this moment match hold up??
+pd <- rt*exp(1)^(-rt*tt) #PDF
+cd <- 1-exp(1)^(-rt*tt)  #CDF
+sv <- 1 - cd #Survival
+hz <- pd/sv  #Hazard. Just r?
+sf <- 20 # scale factor for PDF
+
+mypar(xaxs="i", yaxs="i", mar=c(4,4,1,4))
+cols <- c("black", "black", "black", "black")
+
+plot(tt, sv, # SV
+     type = "l", 
+     ylim = c(0.0, 1.2), 
+     xlab = "time (years)",
+     main="Sv and Hz functions of an exp dist",
+     ylab = "CDF", 
+     bty  = "u", 
+     col  =cols[1],
+     panel.first=grid())
+
+lines(tt, cd, col=cols[2]) # CDF
+
+lines(tt, sf*pd, col=cols[3]) # PDF
+lines(tt, sf*hz, col=cols[4]) # Hz
+axis(4, at <- seq(0, 1, 0.2), labels=at/sf, col=cols[2],
+     col.ticks=cols[2], col.axis=cols[2])
+mtext(text="PDF", side=4, line=2, col=cols[2])
+legend("right", lty=c(1,1), col=cols, inset=c(0.05, 0.5), 
+       legend=c("Survival", "CDF", "PDF", "Hazard"))
+```  
+**ANswer:** Both in my derivation of the hazard function ($hz$) and by working it out via R script, I find that the $hz$ for an exponential distribution is a constant, $hz = r$, where $r$ is the average rate of death. 
+
+
+# Exercise 4 {-}  
+(10 pts) Suppose you have a PDF $p(t)$ with survival function $S(t)$. Given that you have survived to time $t_1$ what is the probability you will survive to time $t_2\gt t_1$? If the difference $\Delta=t_2 - t_1$ were infinitesimal---it's not---the answer would be $1-h(t_1)\Delta$ in which $h(t)$ is the hazard. Hint: model your calculation on the derivation of hazard above.   
+
+## Solution to Ex 4 {-}  
+
+$$\begin{align}
+h(t) \Delta t 
+&= \Pr(t_1\lt T\le t_2 | T\gt t_1, t_1<t_2)\\
+&= \frac{\Pr(t_1\lt T\le t_2 ,T\gt t_1)}{\Pr(T\gt t_1)}\\
+&= \frac{\Pr(t_1\lt T\le t_2)}{\Pr(T\gt t_1)}\\
+&= \frac{p_T(t)(t_2-t_1)}{\Pr(T \gt t_1)}\\
+\end{align}$$
+
+# Poisson process {-}  
+Recall the Poisson process introduced in an earlier assignment. Derivations of the Poisson process begin with the assumption of constant hazard, so it is often described as a process with no memory. A temporal Poisson process is said to have rate $r$ if the expected number of events in a time interval of length $\Delta$ is $r\Delta$. The probability of _n_ events in that interval is $\Pr(n|r,\Delta)=e^{-r\Delta}(r\Delta)^n/n!$. The probability of zero events in that interval is therefore $e^{-r\Delta}$. Evidently the distribution of inter-event times is exponential with rate $r$. Emergency planners typically want to know the probability of one or more events in the next $T$ years, which is just 1 minus the probability of zero events, a fact you will use below in Exercise 5.  
+
+# Lognormal distribution {-}  
+This distribution is discussed by H&H on page 58. One of the agreeable properties of the lognormal is that if $x$ has a lognormal distribution with parameters meanlog = $\alpha$ and sdlog = $\beta$ then $y=1/x$ has a lognormal distribution with meanlog = $-\alpha$ and sdlog = $\beta$.^[You can easily prove that to yourself using conservation of probability. Try it!] Suppose a lognormal distribution has mean $\mu$ and SD $\sigma$. Then moment matching gives the meanlog parameter $\alpha=\ln\left[\mu(1+\sigma^2/\mu^2)^{-1/2}\right]$ and the sdlog parameter $\beta=\sqrt{\ln(1+\sigma^2/\mu^2)}$. Here is a function to compute them:  
+
+```{r logpar}
+logpars <- function(mn, sd) {
+  # meanlog and sdlog for lognormal distribution
+  temp  <- 1 + sd^2/mn^2
+  alpha <- log(mn/sqrt(temp))
+  beta  <- sqrt(log(temp))
+  list(alpha=alpha, beta=beta)
+}
+```
+# Exercise 5 {-}  
+(10 pts) Observations from the [Hawaii Volcano Observatory](https://www.usgs.gov/observatories/hawaiian-volcano-observatory/about-earthquakes-hawaii) (HVO) suggest that earthquakes of magnitude $\ge 7$ occur near Hawaii at a rate of about 1 every 55.8 years. HVO does not give an uncertainty for that number,^[For a scientist, failing to include an uncertainty should be high on one's list of "don't evers".] so we will assume it has an SD of 10 years. Make a figure showing the PDF of the probability of one or more M7+ events in the next 50 years. Hint: Use Monte Carlo, to sample from the PDF for rate, and plug each rate sample into the expression for the Poisson probability of 1 or more events. Use at least a thousand samples.    
+
+## Solution to Ex 5 {-}  
+(Put your figure, and any narrative, here.)  
+
+```{r solEx5, fig.cap="PDF depicting the probability of one or more M7+ events in the next 50 years."}
+modes <- logpars(55.8, 10)
+Tee   <- 50 
+rt    <- rlnorm(1000, meanlog = -modes[[1]], sdlog = modes[[2]])
+probs <- 1-exp(1)^(-rt*Tee)
+hist(probs,
+     main="Probability of a M7+ in the next 50y",
+     xlab= "Probability")
+```
+**Answer Ex5:** By using the Monte Carlo sampling method I was able to produce a distribution of probabilities of one or more M7+ events occurring in the next 50 years. I found the mean probability of an M7+ event occurring to be `r round(mean(probs, na.rm=TRUE), 2)*100`%. 
+
+# Testing Poissonity {-}  
+In most parts of the world, most of the time, earthquakes are well modeled as a Poisson process. One cannot predict when the next earthquake with magnitude $\ge M$ will occur, but one can estimate the rate at which they occur as $N/T$ where $N$ is the number of such events in a historical catalog of length $T$. Needless to say, this is not very satisfying.^[Unless you are a real estate agent selling homes built on fault zones.] As we saw above, the Poisson process has no memory: the intervals between events have an exponential distribution and the hazard is constant. To examine whether a particular process is Poisson we use the fact that the intervals between Poisson events are exponentially distributed and the fact that the coefficient of variation (CoV, $\sigma/\mu$) of the exponential distribution is 1.    
+
+## Cascadia {-}  
+When a great earthquake happens in a coastal zone, sediments dislodged from from the walls of submarine canyons flow seaward along the bottom, driven by gravity, as a dense fluid known as a [turbidity current](https://en.wikipedia.org/wiki/Turbidity_current). When they come to rest the resulting deposits are known as [turbidites](https://en.wikipedia.org/wiki/Turbidite). In sediment cores, turbidites are easily distinguished from the sediments below and above by their relatively greater particle sizes. [Goldfinger et al. (2012)](https://pubs.er.usgs.gov/publication/pp1661F) estimated the occurrence dates of great earthquakes on the [Cascadia subduction zone](https://en.wikipedia.org/wiki/Cascadia_subduction_zone) (CSZ) from the radiocarbon dates of their associated turbidites. The following table is from their paper. Column 2 gives the occurrence times (years before 1950) and column 5 gives the standard deviations of those times.       
+
+```{r GfrTable}
+GfrTable10 <- read.csv("GoldfingerEtAl_Table10.csv")
+kable(GfrTable10, 
+        caption="Turbidite data from Goldfinger et al. (2012). 
+      Our interest here is in the means (column 2) and standard deviations 
+      (column 5) of the estimated earthquake dates. The question 
+      is whether this sequence of dates is from a Poisson process.") %>% 
+  kable_styling()
+```  
+
+# Exercise 6 {-}  
+(30 pts)  
+To examine whether the times of great earthquakes on the CSZ are Poisson proceed as follows:  
+
+1. Using the means and SDs in the above table, draw one set of the 19 dates. Assume the errors are normally distributed.^[Use of the normal approximation carries a small risk that the dates of two events will be reversed, causing a negative interval between them. To guard against this, order the dates before calculating the intervals.]  
+
+2. Use R's `diff()` to get the 18 intervals between the sample of dates in step 1.   
+
+3. Take a single boostrap sample of the 18 intervals in step 2; i.e., sample with replacement.    
+
+4. Compute the CoV of the intervals from step 3.  
+
+5. The procedure in steps 1-4 gives you a single CoV sample from the data. Repeat steps 1-4 to obtain, say, Ns = 1,000 samples.  
+
+6. Use R's `rexp()` to draw 18 samples from an exponential distribution with unit rate. Calculate the CoV of this sample.  
+
+7. Repeat step 6 Ns times to get Ns samples of CoV from a process that you know is Poisson, the reference process, as you might call it.    
+
+8. Make a figure showing two densities (histograms if you prefer): the CoV samples from step 5 and the CoV samples from step 7. The x-label of your figure should be "Coefficient of variation", the y-label should be "Density" and the legend should have entries that say "data" and "Poisson".  
+
+9. Divide the ith CoV sample from step 5 by the ith CoV sample from step 7 and take the natural logarithm of the result. Make a figure showing the density (or histogram if you prefer) of those Ns log-ratios. The x-label should say "Log CoV ratio", and the y-label should be "Density". Indicate the median and usual 95% C.I. on your graph. Estimate the probability mass to the right of 0. Divided by 2, it is the probability that the data are from a Poisson process.      
+
+Why the ratio and the logarithm in step 9? Why don't we just subtract the data CoV samples from the Poisson CoV samples?  Well, CoV is a ratio scale quantity, for which subtraction is an unnatural act, but the ratio of two ratio-scale quantities is also ratio scale, and taking the logarithm converts it to an interval scale quantity that is likely to behave in familiar (symmetric bell-curve) ways. For example, if the turbidite data were from a Poisson process the density in step 9 would be centered on 0 which is the logarithm of 1.   
+
+
+## Solution to Ex 6 {-}  
+
+```{r, bootstrap}
+set.seed(100)
+
+times  <- GfrTable10[,2]
+timesd <- GfrTable10[,5]
+
+# Step 5) Do this 1000 times 
+Ns <- 1000L
+CoV <- rep(NA, Ns)
+
+earth  <- rnorm(19, mean=times, sd = timesd)
+earth  <- earth[order(earth)]
+inter  <- diff(earth)
+    
+for (i in 1:Ns){
+  boot   <- sample(inter, 18, replace = TRUE) #or do this 18 samples with replacement
+  CoV[i] <- sd(boot, na.rm=TRUE) / mean(boot, na.rm =TRUE)
+}
+
+# Step 6) & 7) Draw 18 samples from an exponential distribution
+rt     <- mean(diff(times)) #average time difference. not nessisary
+CoVexp <- rep(NA, Ns)
+expo   <- rexp(18, rate=rt) #Use the mean diff to find the differences
+
+for (i in 1:Ns){
+  bootexpo  <- sample(expo, 18, replace = TRUE)
+  CoVexp[i] <- sd(bootexpo) / mean(bootexpo)
+}
+
+result <- log(CoV/CoVexp, exp(1)) #log CoV ratio
+quant  <- quantile(result, prob=c(0.025, 0.5, 0.975)) #confidence intervals
+```
+
+```{r plotEx6, fig.cap="Density plots of CoV and the log CoV ratio from a Poisson distribution and the Data"}
+d <- density(CoVexp) # returns the density data
+c <- density(CoV)    # returns the density data
+
+mypar(mfrow=c(1,2))
+plot(d, 
+     col  ="skyblue",
+     ylim = c(0, 4.7), 
+     xlim = c(0, 1.75),
+     xlab = "Coefficient of variation",
+     ylab = "Density",
+     main = "Poisson  and Data PDF") # plots the results
+lines(c, 
+      col="black")
+legend("topright", legend=c("Poisson ", "Data"))
+
+hist(result, breaks=30,
+     xlab="Log CoV ratio",
+     ylab="Density",
+     main="Log of CoV Ratios")
+abline(v=quant, col="blue",lwd=2)
+legend("topright", legend=c("0.025 C.I.", "Median","0.975 C.I."))
+
+above <- sum(result > 0)/Ns #probability mass above 95% confidence interval
+PerPois <- (above/2)*100
+```
+**Answer Ex6:** I bootstrapped the CoV from both the earthquake time intervals, and the reference exponential (Poisson ) distribution, and plotted their distributions in the left most figure. Then I took the log of the CoV ratio's and plotted that, along with the 95% C.I. in the rightmost figure. I found the probability that the earthquake time intervals are from a Poisson  distribution to be `r PerPois` % I would conclude that it is unlikely the earthquake's time intervals are drawn from a Poisson distribution. 
+
+I found it important to draw the time intervals from a normal PDF only once, and sample those 1000 times via bootstrapping. If I redraw time interval samples each loop, my 0 value falls within the C.I. interval for the log(CoV/CoV) histogram. Maybe it's possible to draw the samples from a normal distribution 1000 times, and bootstrap those 1000 each. So 1000*1000 iterations. Basically I repeated steps 2-4 1000 times, rather than steps 1-4 1000 times. 
+
+# The "ones trick" {-}  
+
+You can write your own distributions for JAGS, but it is often easier to utilize the _Bernoulli ones trick._ Recall that the joint posterior, from which you are attempting to sample, is a product of PDFs and/or PMFs. If you want to include $p(z_i|a,b)$ as a factor in your likelihood (the $z_i$ can be data or parameters), but the distribution $p()$ is not supplied by JAGS, you can code something like this
+
+```
+for (i in 1:Nz) {
+  f[i] <- formula(z[i], a, b) / constant
+  ones[i] ~ dbern(f[i])
+}
+```  
+
+in which `formula` is the formula for $p(z|a,b)$, and `constant` is a number sufficiently large that `f[i]` cannot exceed 1. Try using `constant = 1000` or `constant = 10000`. Note that in JAGS, unlike BUGS, the "data" vector `ones[]` must be supplied with the data. Make it in R using `ones <- rep(1, N)`.  
+
+What's going on here? Recall that the Bernoulli PMF is $\Pr(y|\phi)=\phi^y(1-\phi)^{1-y}$ in which the data $y$ can be either 1 or 0. By setting $y=1$ you get a factor $\phi$ in your likelihood, which is what you wanted.
+
+# The "zeros trick" {-}  
+The [Poisson zeros trick](http://www.ejwagenmakers.com/BayesCourse/BugsBookZerosTrick.pdf) does the same thing as the Bernoulli ones trick, and I mention it here because you will frequently see it in BUGS models. (If I knew which trick was "best" I would tell you.) Recall that the Poisson PMF is $e^{-\lambda}\lambda^y/y!$ The likelihood associated with a data point $y=0$ is therefore $e^{-\lambda}$. Use code like this:  
+```
+for (i in 1:Nz) {
+   f[i] <- formula(z[i], a, b)
+   zeros[i] ~ dpois( -log(f[i]) + constant )
+}
+```  
+Here `constant` is a number sufficiently large to ensure that the argument of `dpois()` is always positive. As with the ones trick, the `zeros[]` must be entered as data.  
+
+# Exercise 7 {-}  
+(20 pts) Suppose you have N samples `y[i]` from the gamma distribution and you wish to use JAGS to estimate the shape and rate parameters. Suppose further that JAGS does not supply the gamma distribution. **(a)** Write a short BUGS code (no need to run it) _using the ones trick_ to solve the problem. Use uninformative priors for the shape and rate parameters. **(b)** Like (a) but use the zeros trick. **Hints:** Recall that the gamma PDF is $p(y|\alpha,\beta)=y^{\alpha-1}e^{-\beta y}\beta^\alpha/\Gamma(\alpha)$. From Table 9.1 on page 42 of the JAGS manual we see that JAGS supplies the function `loggam()` which gives you $\ln \Gamma()$. Therefore `exp(loggam(alpha))` gives you $\Gamma(\alpha)$.    
+
+## Solution to Ex 7(a) {-}  
+```{r SolEx7a, eval=FALSE}
+data1 <- list(Nz = 1000,
+              y = DATA, 
+              ones = rep(1, Nz))
+
+model1 <- "
+  #the model
+  for (i in 1:Nz) {
+  f[i] <- (y[i]^(a-1) * exp(1)^(-b*y[i]) * b^a) / 1000
+  ones[i] ~ dbern(f[i])
+  }
+  
+  #Priors
+  a ~ dgamma(0.01, 0.01) #alpha for gamma. Shape
+  b ~ dgamma(0.01, 0.01) #beta for gamma. Rate
+"
+
+```
+
+## Solution to Ex 7(b) {-} 
+```{r SolEx7b, eval=FALSE}
+data1 <- list(Nz = 1000,
+              y = DATA, 
+              zeros = rep(0, Nz))
+
+model1 <- "model {
+  
+  #the model
+  for (i in 1:Nz) {
+  f[i] <- (y[i]^(a-1) * exp(1)^(-b*y[i]) * b^a) / 1000
+  zeros[i] ~ dpois( -log(f[i]) + 1000)
+  }
+  
+  #Priors
+  a ~ dgamma(0.01, 0.01) #alpha for gamma. Shape
+  b ~ dgamma(0.01, 0.01) #beta for gamma. Rate
+}
+"
+
+```
+
+**Answer Sol7a-7b** Using the ones and zeros trick, JAGS would now estimate the shape and scale parameters of the gamma distribution distribution even if JAGS did not have a gamma distribution functions. I believe the shape and scale parameters would still need to be initialized. I used the uninformative prior dgamma(0.01, 0.01) even though JAGS is not supposed to have a preset gamma function for this exercise. 
+
+edit: Because shape and scale are RS parameters, I used gamma priors. If shape and rate where interval scale parameters I would use uniform priors. 
+
+
+
+
+
+
+

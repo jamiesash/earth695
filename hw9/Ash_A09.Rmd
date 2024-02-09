@@ -1,0 +1,938 @@
+---
+title: "YourSurname_A09"
+author: "Your name"
+date: "due: 2020-03-27"
+output: 
+  #html_document: 
+  bookdown::html_document2:  
+    self-contained: yes
+    theme: cerulean #paper #cosmo #journal #readable
+    toc: true
+    smooth_scroll: true
+    toc_depth: 3
+    toc_float: true
+    number_sections: true
+    fig_caption: yes
+    code_folding: hide
+    # bibliography: ["geothermal.bib", "r.bib"]
+    # csl: apa-5th-edition.csl
+    # link-citations: yes
+---  
+
+<style type="text/css">  
+/* Note: CSS uses C-style commenting. */
+h1.title{font-size:22px; text-align:center;}
+h4.author{font-size:16px; text-align:center;}
+h4.date{font-size:16px; text-align:center;}
+body{ /* Normal  */ font-size: 13px}
+td {  /* Table   */ font-size: 12px}
+h1 { /* Header 1 */ font-size: 16px}
+h2 { /* Header 2 */ font-size: 14px}
+h3 { /* Header 3 */ font-size: 12px}
+.math{ font-size: 10pt;}
+.hi{ /* hanging indents */ 
+    padding-left:22px; 
+    text-indent:-22px;
+}
+blockquote {  
+    padding: 10px 20px;
+    margin: 0 0 20px;
+    font-size: 12px;
+    border-left: 5px solid #eee;
+}
+code.r{ /* code */ 
+       font-size: 12px;
+}
+pre{/*preformatted text*/ 
+    font-size: 12px;
+}
+p.caption {/* figure captions */ 
+    font-size: 1.0em;
+    font-style: italic; 
+} 
+</style>
+
+```{r setup, echo=FALSE}
+rm(list=ls()) # clean up
+
+## load packages quietly
+shhh <- suppressPackageStartupMessages # It's a library, so shhh!
+want <- c("knitr", "runjags", "coda", "MASS", "Matrix", "kableExtra",
+          "zeallot", "magrittr", "scdensity", "fMultivar", "scales",
+          "microbenchmark", "kableExtra")
+for (pkg in want) shhh(library(pkg, character.only=TRUE))
+
+## set some chunk options
+gr <- (1+sqrt(5))/2 # golden ratio, for figures
+#opts_chunk$set(comment="  ",
+#               #echo=FALSE,
+#               cache=c(TRUE, FALSE)[1], 
+#               eval.after="fig.cap",
+#               collapse=TRUE, 
+#               dev="png",
+#               fig.width=7.0,
+#               out.width="95%",
+#               fig.asp=0.9/gr,
+#               fig.align="center"
+#               )
+
+## Kruschke's utility functions (edited by NF for use in RMarkdown)
+if (c(TRUE,FALSE)[1]) source("DBDA2E-utilities.R") 
+
+## handy function to color text
+colorize <- function(x, color) {
+  ## x is a string
+  ## example:`r colorize("The assignment", "red")`
+  if (knitr::is_latex_output()) {
+    sprintf("\\textcolor{%s}{%s}", color, x)
+  } else if (knitr::is_html_output()) {
+    sprintf("<span style='color: %s;'>%s</span>", color, x)
+  } else x
+}
+
+mypar <- # Convenience wrapper for par()
+## Values are from Bloomfield (2014) "Using R for Numerical Analysis
+## in Science and Engineering." See ?par for meanings.
+function(mgp=c(2,0.5,0), mar=c(4,4,1.5,1.5), bty="l", 
+         bg=gray(0.97), tcl=0.3, mex=0.8, cex.main=0.9,
+         font.main=1,...) 
+  par(mgp=mgp, mar=mar, bty=bty, bg=bg, tcl=tcl, mex=mex,
+      cex.main=cex.main, font.main=font.main,...) 
+
+comma <- # dynamic numbers in narrative
+  function(x) format(x, digits = 2, big.mark = ",")
+# comma(3452345) # "3,452,345"
+# comma(.12358124331) # "0.12"
+
+## fresh start? (This should not be necessary.)
+rmCache <- c(TRUE, FALSE)[1] 
+if (rmCache)
+  if (file.exists("Frazer_A09_cache")) 
+    unlink("Frazer_A09_cache", recursive=TRUE)
+```  
+
+\newcommand{\logit}{\mathrm{logit}}
+\newcommand{\expit}{\mathrm{expit}}
+\newcommand{\E}{\mathrm{E}}
+\newcommand{\Var}{\mathrm{Var}}
+\newcommand{\Corr}{\mathrm{Corr}}
+
+# Goals {-}   
+The goals of this assignment are: (1) to review the RS, IS and PP variable types and introduce the so-called generalized linear model (GLM); (2) to derive the expression for expected sample size (ESS); (3) to introduce the Expectation-Maximization method (EM) and its derivation using Lagrange multipliers; (4) to introduce a couple of functions that enable you to time a piece of code; and (5) to find the evil bug in my code for the wildebeest problem discussed on H&H page 12 and pages 201-207.  
+
+# Correction {-}  
+I've been saying that JAGS uses only slice sampling and conjugacy, but that's not true. During _adaptation_ JAGS looks for variables that are highly correlated and may decide to use Metropolis-Hastings (MH) steps to update those variables simultaneously. MH is more efficient than a Gibbs sampler when variables are highly correlated. (I used to know this, but forgot it. My bad.) Bottom line: If chains are behaving badly and you suspect correlation between variables is the problem, try increasing the number of samples for adaptation.      
+
+# Tiny R-tips {-}  
+- Want to know the floating point precision of your machine in R? Type `.Machine$double.eps` into the console.  
+- Premature optimization is the root of all evil in coding, but when dealing with large data sets, speed can be an issue. Avoid applying `apply()` to data frames. `apply()` coerces its argument to a matrix which can soak up CPU cycles. Vectorized matrix functions such as `rowSums()`, `colSums()`, `rowMeans()` and `colMeans()` are always faster than using `apply()`.  
+
+# Variable types  
+
+Recall the distinctions between interval scale variables (IS), ratio scale variables (RS) and probability/proportion variables (PP).  
+
+* IS variables live on $(-\infty, \infty)$, and only _differences_ between values are meaningful; ratios are never meaningful. The uninformative density for an interval scale quantity $x$ is the uniform density, $q(x)=1$.   
+
+* RS variables live on $(0,\infty)$ and only ratios of values are truly meaningful, although differences between values are sometimes given. For example, saying that the density of water is about 995.75 kg/m^3^ greater than that of air is less meaningful than the statement that water is 814 times denser than air. Notice that the latter statement is independent of the units used. Most quantities in nature are ratio scale, but for mathematical convenience they are often treated as though they are interval scale. One helpful test for a RS quantity is to ask whether the reciprocal is as meaningful as the quantity itself. For example, slowness in seconds/km is as meaningful as speed in km/second, and frequency in cycles per second is as meaningful as period in seconds per cycle. The reciprocal of ticks per sheep may give one pause, but not if the tick were a wolf. The uninformative density for a RS quantity $r$ is the reciprocal density, $q(r)=1/r$.    
+
+* PP variables live on $(0,1)$, and differences are a very poor way to compare them. To see why, notice that the difference $p_2-p1=0.01$ is major if $p_1=0.000001$, but minor if $p_1=0.1$. Ratios of probabilities are better than differences but are also problematic; to see why, notice that the statement $p_2/p_1=2$ is nonsense if $p_1 \gt 1/2$. The best way to compare probabilities is with [ratios of odds](https://www.lesswrong.com/tag/odds). Recall that if $p$ is the probability of an event then $\omega=p/(1-p)$ is the odds of the event. You can tell that odds are an RS quantity, because it lives on $(0,\infty)$ and the odds-for, $p/(1-p)$, is as meaningful as the odds-against, $(1-p)/p$. The uninformative density for a PP quantity $\phi$ is the Haldane density, $q(\phi)=\phi^{-1}(1-\phi)^{-1}$.  
+
+# Generalized linear models   
+
+We have all been trained to handle linear models such as $y=ax_1+bx_2+cx_3$, in which the data $y$ and predictors $x_i$ are (supposedly, approximately) interval scale, but for many important problems that model leads to trouble.  
+
+To see why, suppose you have a problem in which a binomial likelihood has probability parameter $\phi$ that is a function of an IS predictor $x$, an RS predictor $r$ and a PP predictor $\psi$. The model $\phi=a\, x+b\, r+c\,\psi$ is then absurd, not least because it can obviously give values $\phi$ outside the interval $(0,1)$. The preferred model is $\logit(\phi)=a\,x + b\, \ln(r) + c\, \logit(\psi)$ which can also be written $\phi=\expit[a\,x+b\,\ln(r)+c\,\logit(\psi)]$.^[Recall the definitions of logit() and expit() from A01.] Notice the homogeneity of variable types in the relation $\logit(\phi)=a\,x + b\,\ln(r) + c\,\logit(\psi)$; everything is interval-scale so addition is the natural way to combine the various predictors.    
+
+Statisticians refer to this type of thing as a _generalized linear model_ (GLM) and they make a big deal out of it, but the principle is very simple---tranform all your predictors to interval scale, then transform the linear sum to whatever type of variable is appropriate. For example, if the target variable is Poisson intensity for ticks on sheep (an RS parameter) we would write $\ln(\lambda)=a\,x+b\,\ln(r)+c\,\logit(\psi)$ or $\lambda=\exp[a\,x+b\,\ln(r)+c\,\logit(\psi)]$.^[Categorical predictors and parameters don't fit neatly into this rule, but they are easily included using so-called _contrasts._]   
+
+# Exercise 0 {-}  
+(10 pts)  
+(a) Give the LaTeX formula for $\expit()$ with its range and domain. It transforms what type of variable (IS, RS or PP) to what other type of variable?  
+(b) Give the LaTeX formula for $\logit()$ with its range and domain. It transforms what type of variable to what other type of variable.  
+(c) Give the domain and range of the natural logarithm $\ln()$. It transforms what type of variable to what other type of variable?  
+(d) Give the range and domain of the exponential function $\exp()$. It transforms what type of variable to what other type of variable?  
+
+## Ex 0 solution {-}  
+(a) The LaTeX formula for $\expit()$ is $expit(x) = 1/(1+exp(-x))$ and its domain is $-\inf$ to $\inf$ and it's range is $0$ to $1$ (approaches 0). The $expit()$ function transforms an **IS variable into a PP** variable. 
+
+(b) The LaTeX formula for $\logit()$ is $logit = log(x/(1-x))$. It's domain is $0$ to $1$ and it's range is $-\inf$ to $\inf$. The logit() function transforms **PP variables into IS** variables.   
+
+(c) The domain and range of the natural logarithm $\ln()$ is $0$ to $\inf$, and it's range is $-\inf$ to $\inf$. It transforms **RS variables into IS** variables.  
+
+(d) The domain and range of the exponential function $exp()$ is $-\inf$ to $\inf$, and it's range is $0$ to $\inf$. It transforms **IS variables into RS** variables.  
+
+# Stats review    
+One of you asked for a derivation of the formula for effective sample size (ESS), so we do it here. First we need to remind ourselves of familiar notions such as the sample mean and the variance of the sample mean.    
+
+## Sample mean {-}  
+Suppose $x$ is a random variable with mean $\mu$ and SD $\sigma$. The _sample mean_ is defined as $\bar{x}=N^{-1}\sum_{i=1}^N x_i$. No matter what the distribution of $x$, the linearity of the expectation functional $E(\,)$ means that the expected value of the sample mean is the expected value of the population mean.     
+
+$$\begin{align}
+E(\bar{x}) &= N^{-1}\sum_{i=1}^N E(x_i)\\
+           &= N^{-1}\sum_{i=1}^N \mu \\
+           &= N^{-1}N \mu\\
+           &= \mu
+\end{align}$$  
+
+## A useful relation {-}  
+The following is a useful relation for the variance operator $V(\,)$ that you almost certainly learned in an earlier course, but may have forgotten: $V(f)=E(f^2)-E(f)^2$. Let's derive it. The parentheses "[ ]" and "( )" mean the same thing here:     
+
+$$\begin{align}
+V(f)
+&=E[(f-E(f))^2]\\
+&=E[f^2 - 2fE(f) + E(f)^2]\\
+&=E[f^2] - 2E[f]E(f) + E(f)^2\\
+&=E[f^2]-E[f]^2
+\end{align}$$
+
+## Variance of the sample mean {-}  
+We calculate the variance $\sigma^2_{\bar{x}}$ of the sample mean like this, using $C_{ij}$ to denote the covariance matrix and $\rho_{ij}$ to denote the correlation matrix. The definitions of those two quantities will be obvious as we write them.  
+
+$$\begin{align}
+\sigma^2_{\bar{x}} 
+&=E\left[(\bar{x}-E(\bar{x}))^2\right] \\
+&= E\left[\,(N^{-1}\Sigma_i x_i-\mu)\,(N^{-1}\Sigma_j x_j-\mu)\,\right] \\
+&= E\left[\,N^{-1}\Sigma_i (x_i-\mu)\,N^{-1}\Sigma_j (x_j-\mu)\,\right] \\
+&= N^{-2}\Sigma_i\Sigma_j E\left[(x_i-\mu)(x_j-\mu)\right]\\
+&= N^{-2}\Sigma_i\Sigma_j C_{ij}\\
+&= N^{-2}\Sigma_i\Sigma_j \sigma_x^2\rho_{ij}\\
+&= \frac{\sigma_x^2}{N^2}\Sigma_i\Sigma_j \rho_{ij}\\
+\end{align}$$  
+
+The quantity $\Sigma_i\Sigma_j \rho_{ij}$ is a simple sum of all the elements in the correlation matrix. The diagonal elements of the correlation matrix are always 1, and the elements of the Markov chain are said to be uncorrelated if the off-diagonal elements are zero, i.e., if $\rho_{ij}=0$ for $i \ne j$. In that case $\Sigma_i\Sigma_j\rho_{ij}$ is just the sum of the diagonal elements, and since each of those elements is 1, the sum is $N$. We thus have the familiar result $\sigma^2_{\bar{x}}=\sigma_x^2/N$.  
+
+# Effective sample size    
+
+What happens when the elements of the Markov chain _are_ correlated. Assume that the chain is in equilibrium, so that the correlation $\rho_{ij}$ depends only on the difference $k=|i-j|$. To sum the correlation matrix, we must sum along all the diagonals, not just the main diagonal. We have seen that the sum along the main diagonal is $N$. The first upper diagonal has length $N-1$ and every element of it is $\rho_1$ so the sum is $(N-1)\rho_1$. Similarly for the first lower diagonal. The second upper diagonal has length $N-2$ and every element of it has the value $\rho_2$, so the sum along there is $(N-2)\rho_2$, and similarly for the second lower diagonal. Continuing in this way we see that  
+
+$$\begin{align}
+\Sigma_i\Sigma_j\rho_{ij} 
+&= N\rho_0 + 2 \left[(N-1) \rho_1 + (N-2) \rho_2 + \cdots 
++  2 \rho_{N-2} + \rho_{N-1}\right]\\
+&= N + 2\sum_{k=1}^{N-1} (N-k)\rho_k
+\ \ \ \ \ \ \ \text{which can be}\gt N \text{ if some }\rho_k \lt 0 \\
+&\lt N + 2\sum_{k=1}^{N-1} N\rho_k
+\ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \text{Assume all } \rho_k \gt 0\\
+&=N \left[ 1 + 2\sum_{k=1}^{N-1} \rho_k\right]\\
+&\lt N \left[ 1 + 2\sum_{k=1}^\infty \rho_k\right]
+\ \ \ \ \ \ \ \ \ \ \ \ 
+\text{Typically } \rho_k\rightarrow 0 \text{ as } N\rightarrow \infty
+\end{align}$$  
+
+We therefore have  
+
+$$\begin{align}
+\sigma^2_{\bar{x}} 
+&= \frac{\sigma_x^2}{N^2}\Sigma_i\Sigma_j \rho_{ij}\\
+&\lt \frac{\sigma_x^2}{N^2}N \left[ 1 + 2\sum_{k=1}^\infty \rho_k\right]\\
+&=\frac{\sigma_x^2}{N} \left[ 1 + 2\sum_{k=1}^\infty \rho_k\right]\\
+&=\frac{\sigma_x^2}{N_{\text{eff}}} 
+\end{align}$$  
+
+in which we have used the notation $N_{\text{eff}}$ for effective sample size ESS:   
+
+$$
+{N_{\text{eff}}} = \frac{N}{ 1 + 2\sum_{k=1}^\infty \rho_k}.
+$$  
+
+# Exercise 1 {-}   
+(10 pts) If $\rho_k=a^k$ for some $0\lt a\lt 1$ then the autocorrelation resembles a decaying exponential $\exp(-|\ln a|k)$, and you can estimate the value $a$ as the median of $\rho_{k+1}/\rho_k$. Derive the resulting simple expression for $N_\text{eff}$ in terms of $a$ and $N$. **Hint:** Notice that $\sum_{k=1}^\infty a^k = a\sum_{k=0}^\infty a^k$, then look up _geometric series_ in Wikipedia.     
+
+## Ex 1 solution {-}  
+$$\begin{align}
+&{N_{\text{eff}}} = \frac{N}{ 1 + 2\sum_{k=1}^\infty \rho_k} 
+&\text{effective sample size ESS}\\ 
+&{N_{\text{eff}}} = \frac{N}{ 1 + 2\sum_{k=1}^\infty a^k}
+&\text{substitute pk for ak}\\ 
+&{N_{\text{eff}}} = \frac{N}{ 1 + 2a\sum_{k=0}^\infty a^k}
+&\text{}\\ 
+&{N_{\text{eff}}} = \frac{N}{ 1 + 2a + 2a^2+2a^3...}
+&\text{geometric series}\\ 
+\end{align}$$ 
+
+
+**Answer:** When $0 < a < 1$, and as $k -> \infty$, then only the first few sums of $a\sum_{k=0}^\infty a^k$ matter because higher power $a^k$'s become inconsequentially small. At what $k$ value $a^k$ become inconsequentially small depends on the size of $N$ and $a$. 
+
+# ESS summary  
+You run JAGS or some other MCMC software and use your samples $\theta^{(i)}$ to estimate the unknown population mean $\mu_\theta$ and variance $\sigma^2_\theta$ by the sample mean  $\bar{\theta}$ and sample variance $S^2_\theta$, respectively. The SD of your sample _mean_ is less than $S_\theta/\sqrt{N_{\text{eff}}}$. By the central limit theorem,^[The central limit theorem states that the mean of independent identically distributed samples from _**any**_ distribution has a Normal distribution in the limit as the number of samples goes to infinity.] a 95% confidence interval for your population mean is therefore $\bar{\theta}\pm1.96\,S_\theta/\sqrt{N_{\text{eff}}}$.^[Recall that $\pm 1.96$ is the 95% confidence interval for the standard Normal.] The approximations made in deriving the formula for $N_\text{eff}$ tend to underestimate it, so our confidence interval for population mean is conservatively large.     
+
+# Exercise 2 {-}  
+(10 pts) The following chunk generates a vector of random numbers `x[1:N]`. It then computes the autocorrelation $\rho_k$ using `stats::acf()` and `myacf()` with 39 lags, and plots them. Your task is to add a few lines of code to the chunk to: **(a)** fit the autocorrelation to the simple model $\rho_{k+1}/\rho_k = a$ by estimating $a$ as the median of $\rho_{k+1}/\rho_k$ for $k=1,2,\ldots,15$, and **(b)** Use the formula you derived above to calculate the effective sample size $N_\text{eff}$. Annotate the plot with sample size and effective sample size using the given `text()` statement.    
+
+```{r Ex2, out.width="80%", fig.cap="Autocorrelation and effective sample size (ESS) from the procedure derived above."}
+N <- 2048L
+r <- rnorm(2*N)                         # 2N random numbers
+f1 <- 0.9^(0:100)                       # make a filter in time domain
+f <- c(f1, rep(0, 2*N-length(f1)))      # pad to length 2N with zeros
+x <- fft(fft(f)*fft(r), inv=T)          # convolve using fft
+x <- x[1:N]                             # truncate to length N
+x <- Re(x)                              # take real part
+x <- x - mean(x)                        # remove mean
+x <- x/sd(x)                            # standardize
+
+myacf <- function(x, lag.max=49) {     # home-made acf()
+  N <- length(x)
+  x <- x - mean(x)        # de-mean
+  x <- x/sd(x)            # standardize
+  ac <- double(lag.max)   # pre-allocate
+  for (k in 1:lag.max) {  # lag loop
+    ac[k] <- mean( x[1:(N-k)] * x[(k+1):N] )
+  }
+  ac <- c(1, ac)          # include lag 0
+} 
+
+lags <- 39 
+myac <- # my home-made acf(), so you can see how it's done
+  myacf(x, lag.max=lags) 
+ac <-   # the R-supplied stats::acf()
+    acf(x, lag.max=lags, type="correlation", plot=FALSE)$acf[ ,1,1]
+
+mypar()
+plot( 0:lags,   ac, col="black", yaxs="i", panel.first=grid(),
+      xlab="lag", ylab="autocorrelation", ylim=c(-0.05, 1.05))
+lines(0:lags, myac, col="red"  ) # home-made
+legend(28, 0.8, bty="n", inset=c(0.05, 0.0), cex=1.0, 
+       pch=c(1, NA), col=c("black", "red"), lty=c(NA, 1),
+       legend=c("stats::acf()", "myacf()"),
+       title="Autocorr. functions")
+
+## Put your code here to...
+#Finding in a for loop but vectorizing the arithmetic works better
+#a <- single(15)
+#estimate a as the median of pk/pk+1 for k=1:15
+#for (i in 1:15) a[i] <- ac[i+1]/ac[i]
+#a <- median(a, na.rm=TRUE)
+
+#estimate a in the formula for N_eff that you derived above
+a <- ac[2:15]/ac[1:14]
+a <- median(a) 
+suma   <- 0 
+for (i in 39) suma <- suma + a^i
+
+#Formula for Neff using the sum of a
+Neff <- N/(1+2*suma) 
+
+## then annotate the plot with the statement
+text(30, 0.90, pos=4, cex=1.05, paste("SS =", N, "\nESS =", round(Neff)) )
+```  
+
+**Answer Ex2:** First I found $a$ as the median of $pk_{i+1}/pk$ for the sequence $k=1:15$ by one. Then I plug the estimated $a$ = `r round(a,2)`, into the equation derived in exercise 1, ${N_{\text{eff}}} = N/(1 + 2a\sum_{k=0}^\infty a^k)$, and found the effective sample size to be `r round(Neff)`. 
+
+# EM  
+One of you needs to know about the [expectation maximization](https://en.wikipedia.org/wiki/Expectation–maximization_algorithm) algorithm (EM) right now, and the rest of you will surely encounter it someday, so let's have a look. My reference for this is Gelman et al. (2014) _Bayesian Data Analysis, 3rd Edition._  
+
+Suppose you have a problem that is computationally intense and you are willing to settle for the _modes_ of your posterior rather than the full posterior. Recall that a [mode](https://en.wikipedia.org/wiki/Mode_(statistics)) of a PDF is a location at which the PDF has a peak: the first derivative vanishes there and the second derivative is negative. If a PDF has just one mode it is said to be unimodal, and if it has more than one it is said to be multimodal. Most of the commonly used univariate and multivariate PDFs are unimodal. For example, the mode of $N(y|\mu,\sigma)$ is at $y=\mu$, a result that is obvious from inspection of the Normal kernel $\exp(-\tau(y-\mu)^2/2)$, or by the more general method of setting the derivative of the kernel to zero and solving for $y$.  
+
+Suppose further that you are willing to settle for the posterior modes of just _some_ of your parameters. In that case, EM will help you find them. We introduce the notation $\theta=(\gamma, \phi)$ in which $\phi$ is the vector of parameters whose posterior modes we want, and $\gamma$ is the vector of the parameters we don't care so much about. Using the familiar product rule with $y$ denoting data we have $p(\gamma,\phi|y) = p(\gamma|\phi,y) p(\phi|y)$. For clarity in subsequent math, the conditioning on data will be understood, and I won't bother to write it. The product rule becomes $p(\gamma,\phi) = p(\gamma|\phi) p(\phi)$. Taking the log of the product rule, and rearranging gives  
+
+$$
+\ln p(\phi) = \ln p(\gamma, \phi) - \ln p(\gamma | \phi)
+$$  
+Now pick any starting value $\phi^{(1)}$ and consider the PDF $p(\gamma|\phi^{(1)})$. We multiply the previous equation by it and integrate over $\gamma$, obtaining  
+
+$$
+\ln p(\phi) = 
+\int\! d\gamma\,p(\gamma|\phi^{(1)})\ln p(\gamma, \phi) - 
+\int\! d\gamma\,p(\gamma|\phi^{(1)})\ln p(\gamma | \phi).  
+$$  
+Notice that the left hand side didn't change. This is because $\ln p(\phi)$ is independent of $\gamma$, and $\int\! d\gamma\,p(\gamma|\phi^{(1)})=1$. (Remember $p(\gamma|\phi^{(1)})$ is a real PDF so it must integrate to 1.)  Moreover, since the natural logarithm is a monotonically increasing function, the modes of $p(\phi)$ also maximize $\ln p(\phi)$. If we can find a $\phi$ that increases the value of the right hand side we will have also increased the value of the left hand side, i.e., we will have moved closer to a mode of $p(\phi)$.  
+
+How to find a $\phi$ that increases the value of the right hand side? The "trick" on which EM is based is that the _second_ integral on the right hand side is _reduced_ by _**any**_  $\phi \ne \phi^{(1)}$, a fact we will prove in a moment. Therefore our task is to find a $\phi^{(2)}\ne\phi^{(1)}$ that maximizes the value of that _first_ integral on the right hand side, which is denoted by $Q(\phi|\phi^{(1)})$ in the EM literature. Having done that, we replace $\phi^{(1)}$ by $\phi^{(2)}$ and start again. By iterating, we find a mode of $p(\phi)$. There may be other modes, and we try to find them by starting at other $\phi^{(1)}$. There are no guarantees.  
+
+## Proof of EM {-}  
+We now prove that $\int\! d\gamma\,p(\gamma|\phi^{(1)})\ln p(\gamma | \phi)$ is a maximum at $\phi=\phi^{(1)}$ and hence that any other value of $\phi$ will reduce it. To simplify our cumbersome notation we write $f(\gamma)=p(\gamma|\phi^{(1)})$ and $g(\gamma)=p(\gamma|\phi)$. Our task is now to prove that, for fixed $g$, $\int\!f \ln g$ is maximized by choosing $f=g$. I don't know how to do that (I tried), so I'll settle for showing that, for fixed $f$, it is maximized by choosing $g=f$. 
+
+Consider that we want to maximize $\int\!f\ln g$ subject to the constraint that $g$ is a PDF, hence it must integrate to 1. We imagine a small _variation_ $\delta g$, which like $f$ and $g$ is a function of $\gamma$, but vanishingly small, with the property that $g(\gamma)+\delta g(\gamma)$ is also a PDF, hence $\delta g$ will be positive for some values of $\gamma$ and negative for others.  The variation operator $\delta$ (we are not talking about delta functions here) has a product rule similar to the product rule for derivatives. If $a$ is a scalar and $f$ is a function then $\delta(af)=\delta a\cdot f + a\cdot \delta f$. If $f$ and $g$ are two functions then $\delta(fg)=\delta f \cdot g + f\cdot \delta g$. Got all that? Here we go:  
+
+To find a constrained maximum (or minimum) subject to a constraint, we add the constraint to the quantity of interest with a [Lagrange multiplier](https://en.wikipedia.org/wiki/Lagrange_multiplier) as a coefficient. In our case, we therefore seek to maximize   
+$$
+\varphi = \int\! f\cdot \ln g\ \  + \lambda \left( 1-\int\! g\right)
+$$  
+in which $\lambda$ is a Lagrange multiplier. Applying the variational operator $\delta$ to both sides, and remembering that $f$ is fixed, gives  
+
+$$\begin{align}
+\delta\varphi 
+&= \int\! f\cdot \delta\ln g\   + \ 
+\delta\lambda\cdot \left( 1-\int \delta g\right) - 
+\lambda \int \delta g\\
+&= \int f\cdot \frac{\delta g}{g}\ \  + \ 
+\delta \lambda \left( 1-\int \delta g\right) -
+\lambda \int \delta g\\
+&=\int\!\delta g\cdot\left( \frac{f}{g}-\lambda\right) +\ 
+\delta \lambda \left( 1-\int \delta g\right)
+\end{align}$$  
+
+The condition for an extremum of $\varphi$ is that its variation $\delta\varphi$ must vanish for arbitrary $\delta g$ and arbitary $\delta\lambda$.^[This is analogous to the condition for an extremum of a function $f(x,y)$: the differential $\delta f=\partial_xf\cdot \delta x + \partial_y f\cdot \delta y$ must vanish for arbitrary $\delta x$ and $\delta y$.] Therefore (1) $f/g=\lambda$ and (2) $\int\! g = 1$. Rewriting (1) as $f=\lambda g$ and integrating both sides gives $\int\! f = \lambda\int\! g$. From (2) we have $\int\! g = 1$, and remembering that $f$ is a PDF gives $\int\! f = 1$, hence $\int\! f = \lambda\int\! g$ gives $\lambda = 1$. Finally, substituting $\lambda=1$ into (1) gives $g=f$.  
+
+# EM summary {-}  
+We try to maximize $Q(\phi|\phi^{(1)})$ with respect to $\phi$, and then we replace $\phi^{(1)}$ by the new value of $\phi$ and maximize again with respect to $\phi$, and so forth. When $Q$ stops increasing, we are at a mode of $p(\phi)$. Remember that  
+
+$$
+Q(\phi|\phi^{(1)}) = 
+\int\! d\gamma\ p(\gamma|\phi^{(1)})\cdot \ln p(\gamma, \phi).
+$$  
+
+I have never coded EM, or used it in a problem, so all I can give you for now is the foundational material above. In case you have not seen Lagrange multipliers used before, here is a short example followed by an exercise:    
+
+## Lagrange multiplier example {-}  
+**Problem:** Find the minimum of $z=x^2+y^2$ on the line $x+y=1$ using a Lagrange multiplier.   
+**Solution:** We write
+
+$$\begin{align}
+\varphi &=x^2 + y^2 + \lambda(x+y-1)\\ \\
+\delta\varphi &= 2x\,\delta x + 2y\,\delta y + 
+(\delta \lambda)(x+y-1) + \lambda(\delta x + \delta y)\\
+&=(2x+\lambda)\delta x + (2y + \lambda)\delta y + (\delta\lambda)(x+y-1)
+\end{align}$$  
+
+At the minimum of $\varphi$, its variation $\delta\varphi$ must be zero for arbitrary variations $\delta x$, $\delta y$ and $\delta\lambda$, hence the coefficients of those variations must vanish. We thus have three linear equations in three unknowns:  
+
+$$
+2x + \lambda = 0\\
+2y + \lambda = 0  (\#eq:linsys1)\\
+x + y = 1
+$$
+It follows that 
+
+$$
+x=-\lambda/2\\
+y=-\lambda/2\\
+-\lambda/2 - \lambda/2 = 1
+$$  
+hence $\lambda=-1$, and the minimum is at $x=y=1/2$.  
+
+Let's solve it again by a more general technique for linear equations. From equations \@ref(eq:linsys1) we build a matrix of coefficients, naming the columns by their corresponding unknowns. The result is as follows:    
+```{r collapse=FALSE}
+A <- rbind(c(2, 0, 1),
+           c(0, 2, 1),
+           c(1, 1, 0))
+colnames(A) <- c("x", "y", "lambda")
+b <- c(0, 0, 1)
+ans <- solve(A, b)
+print(ans)
+```
+
+
+# Exercise 3 {-} 
+(15 pts) Find the minimum of $(x-2)^2+y^2+3z^2$ on the plane $x+2y+z=2$ using a Lagrange multiplier and the base-R linear equation solver `solve()`. Do not attempt this exercise until you understand the matrix construction in the preceding example.  
+
+## Ex 3 solution {-}  
+
+$$
+R(x,y,z) = (x-2)^2+y^2+3z^2\\
+g(x,y,z) = x+2y+z=2\\
+\nabla R = \lambda \nabla g
+$$
+
+$$\begin{align}
+&\frac{\delta R}{\delta x} = 2(x-2)
+&\frac{\delta g}{\delta x} = 1\\
+&\frac{\delta R}{\delta y} = 2y
+&\frac{\delta g}{\delta y} = 2\\
+&\frac{\delta R}{\delta z} = 6z
+&\frac{\delta g}{\delta z} = 1\\
+\end{align}$$ 
+
+$$
+\nabla R = \lambda \nabla g\\
+$$
+
+$$\begin{align}
+&1) 
+&2(x-2) = (1) \lambda\\
+&2) 
+&2y = (2) \lambda \\
+&3)
+&6z = (1) \lambda \\
+&4)
+&x+2y+z=2\\
+&\\
+&1) 
+&2x - \lambda= 4\\
+&2) 
+&2y - 2\lambda= 0 \\
+&3)
+&6z - \lambda= 0 \\
+&4)
+&x+2y+z-2=0
+\end{align}$$
+
+
+```{r Ex3sol}
+
+A <- rbind(c(2,0,0,-1),
+           c(0,2,0,-2),
+           c(0,0,6,-1),
+           c(1,2,1, 0))
+
+b     <-   c(4,0,0,2)
+
+colnames(A) <- c("x", "y", "z", "lambda")
+
+ans <- solve(A, b)
+print(ans)
+```
+
+**Answer:** I put the above system of linear equations (1-4) into matrix A and vector B then have R solve the matrix. I found the minimum of $(x-2)^2+y^2+3z^2$ on the plane $x+2y+z=2$ to be $x=2$, $y=0$, $z=0$, and $\lambda = 0$. I also tried solving it the same way as the example, and got a similar matrix only the last column for $\lambda$ was all positive (as oppose to all negative). But, this did not affect the final answer. I have the other way written out by hand and not included here. 
+
+# Testing CDF() {-}  
+
+The `CDF()` function we used in the last assignment was written for clarity not speed, and I wondered whether it could be sped up by getting rid of the for-loop. The following chunk contains the `CDF()` from A08, and a new version, `CDF1()` that uses R's `cumsum()` instead of a for-loop. It does run faster, but not as fast as I had hoped.  
+
+```{r Ex4}
+## The original CDF(), which is easy to follow
+CDF <- function(FUN, a, b, nx=301, ...) {
+  # No bullet proofing! Accuracy increases with nx, speed declines.
+  x <- seq(a, b, len=nx)
+  fx <- FUN(x, ...) # evaluate density function at x[]
+  Fx <- double(nx)    
+  Fx[1] <- 0.0
+  for (i in 2:nx) { # area of trapezoid = average height x width
+    Fx[i] <- Fx[i-1] + 0.5 * (fx[i] + fx[i-1]) * (x[i] - x[i-1])
+  } 
+  fx <- fx/Fx[nx]   # a PDF sampled at x[]
+  Fx <- Fx/Fx[nx]   # a CDF sampled at x[]
+  data.frame(x=x, fx=fx, Fx=Fx)
+}
+
+## The new CDF, which is considerably more subtle
+CDF1 <- function(FUN, a, b, nx=301, ...) {
+  # no bullet proofing! Accuracy increases with nx, speed declines.
+  x <- seq(a, b, len=nx)
+  fx <- FUN(x, ...) # evaluate density function at x[]
+  Fx <- (cumsum(fx) - 0.5*fx - 0.5*fx[1])*(b - a)/(nx - 1)    
+  fx <- fx/Fx[nx]   # a PDF sampled at x[]
+  Fx <- Fx/Fx[nx]   # a CDF sampled at x[]
+  data.frame(x=x, fx=fx, Fx=Fx)
+}
+
+## make a test function
+fun1 <- function(x) {
+  mix = c(0.5, 0.2, 0.3)
+  mus = c(2.0, 4.0, 7.0)
+  sds = c(0.5, 0.3, 0.5)
+y <- double(length(x))
+for (i in 1:3) 
+  y <- y + mix[i]*dnorm(x, mus[i], sds[i])
+return(y)
+}
+
+## check agreement of CDF() and CDF1
+a <- 0; b <- 10
+df  <- CDF(  FUN=fun1, a=a, b=b)
+df1 <- CDF1( FUN=fun1, a=a, b=b)
+
+reldif <- function(f, g) {
+  tol <- .Machine$double.eps
+  rel <- 2*abs(f-g)/(abs(f) + abs(g) + tol)
+  c(maximum=max(rel), median=median(rel), mean=mean(rel))
+}
+msg <- c("Statistics for the element-by-element differences",
+         "between CDF() and CDF1().\n")
+cat(msg)
+(reldif(df$Fx, df1$Fx))
+```  
+
+In the following chunk we do a time comparison. The results will be slightly different every time you run this chunk. Consider setting `eval=FALSE` in the chunk header when you knit.   
+
+```{r eval=FALSE, collapse=FALSE}  
+if (c(TRUE, FALSE)[1]) {
+  mb <- microbenchmark( # pkg loaded in setup chunk
+          CDF( fun1, a=a, b=b),
+          CDF1(fun1, a=a, b=b))
+  print(mb)
+} else {
+  n <- 1e4
+  cat("Time for", comma(n), "runs of CDF() and CDF1().\n" )
+  ( system.time(for(i in 1:n) CDF( fun1, a=a, b=b )) )
+  ( system.time(for(i in 1:n) CDF1(fun1, a=a, b=b )) )
+}
+```  
+
+I suspect that the test function `fun1()` added a lot of time to this test, hiding some of the benefit from `CDF1()`. In this next chunk we do another test, using the identity function as a test function. 
+
+```{r, collapse=FALSE, eval=FALSE}
+fun2 <- function(x) x
+if (c(TRUE, FALSE)[1]) {
+  mb <- microbenchmark( # pkg loaded in setup chunk
+          CDF( fun2, a=a, b=b),
+          CDF1(fun2, a=a, b=b))
+  print(mb)
+} else {
+  n <- 1e4
+  cat("Time for", comma(n), "runs of CDF() and CDF1().\n" )
+  ( system.time(for(i in 1:n) CDF( fun2, a=a, b=b )) )
+  ( system.time(for(i in 1:n) CDF1(fun2, a=a, b=b )) )
+}
+```  
+Using a super-simple function reduced the system computation time, but only by 1/2. In other words `CDF1()` cannot be more than twice as fast as `CDF()`.  
+
+# Ricker redux    
+
+(The following material is improved from A01.) The footnote on page 12 of H&H introduces the logistic model $\partial_t \ln N(t) = r[1-N(t)/K]$ in which $\partial_t$ is an abbreviation for $\partial/\partial t$, $N(t)$ is a population level (number of individuals) or population density (individuals per unit area) at time $t$, $r$ is the intrinsic population growth rate and $K$ is the carrying capacity of the environment. This model is associated with [scramble competition](https://en.wikipedia.org/wiki/Scramble_competition) in which all individuals compete for finite resources. The alternative is [contest competition](https://en.wikipedia.org/wiki/Contest_competition) in which a few individuals take all they need and others perish. 
+
+The discretized form of the logistic model is called the Ricker model,  
+$$
+\ln N_t=\ln N_{t-1} + r(1-N_{t-1}/K)\Delta t
+$$, 
+
+and taking the time step $\Delta t$ to be one year allows us to drop it from the equation, obtaining  
+
+$$
+\ln (N_t/N_{t-1}) = r(1 - K^{-1}N_{t-1}) = r - (r/K) N_{t-1}
+$$
+
+# Wildebeest   
+
+I found a brief recent history of wildebeest, _Connochaetes taurinus,_ online in a [draft manuscript](http://www.uvm.edu/~dstratto/bcor102/readings/2_wildebeest.pdf) by D. Stratton. Briefly, wildebeest are migratory, and the population fluctuates in the course of migration, but by estimating the population density at the same time of year in the same location it is possible to estimate the larger population. Apart from density, the strongest regulator of population appears to be dry season rainfall ([Mduma et al. 1999](https://besjournals.onlinelibrary.wiley.com/doi/pdf/10.1046/j.1365-2656.1999.00352.x)).  
+
+# Process models {-}  
+
+The question asked of the wildebeest data by H&H is: To what extent do rainfall deviations $x_t$ affect the population growth rate and carrying capacity? In the following you will see a lot of [logarithmic derivatives](https://en.wikipedia.org/wiki/Logarithmic_derivative). Why? Because they are easily made dimensionless., i.e., independent of units of measurement. For example, if we standardize the rainfall data $x_t$ it no longer has units, and then $\partial_x \ln r = r^{-1}\partial_x r$ has no units either. If you work with dimensionless quantities you will never find yourself struggling to compare apples with oranges.  
+
+## Process model 1 {-}  
+We generalize $\ln (N_t/N_{t-1}) = r(1 - K^{-1}N_{t-1})$ as follows, in which $\partial_x$ is an abbreviation for $\partial/\partial x$, and $\ln()$ is the natural logarithm:  
+
+$$\begin{align}
+\ln \left[\frac{N_t}{N_{t-1}}\right]
+&= r\left(1 + x_t \frac{\partial_x r}{r}\right)
+   \left[1 - K^{-1}
+   \left(1 + x_t \frac{\partial_x K^{-1}}{K^{-1}}\right)N_{t-1}\right]\\ 
+&= r\left(1 + x_t \partial_x \ln r\right)
+   \left[1 - K^{-1}
+   \left(1 + x_t \partial_x \ln K^{-1}\right)N_{t-1}\right]\\
+&= \beta_0(1 + x_t \beta_1 )\left[ 1 - 
+\beta_2 (1 + x_t \beta_3) N_{t-1}\right]\\
+\end{align}$$  
+
+This model is correct, but it has two interaction terms (notice the term in $x_tN_{t-1}$ and the term in $x_t^2N_{t-1}$) and we would prefer a model with just one interaction term, as in H&H. Let's try again.  
+
+## Process model 2 {-}  
+
+Beginning with the Ricker equation in the form $\ln (N_t/N_{t-1}) = r - (r/K) N_{t-1}$ we find the following model:  
+
+$$\begin{align}
+\ln [N_t/N_{t-1}]
+&= r(1 + x_t \partial_x \ln r) - (r/K)[1 + x_t \partial_x \ln (r/K)]N_{t-1}\\
+&= \beta_0 + \beta_1x_t - \beta_2 N_{t-1} - \beta_3 x_t N_{t-1}
+\end{align}$$  
+
+Comparing the two forms of the model shows that $\beta_0=r$, $\beta_2 = r/K$, $\beta_1 = r\, \partial_x \ln r$, and $\beta_3 = (r/K)\, \partial_x \ln(r/K)$.  
+
+Apart from a slight change in notation (the meanings of the beta coefficients), this model is the same as the model given by H&H in the footnote on page 12, but with the difference that our derivation gives clear biological meaning to all of the coefficients. Notice that if annual precipitation is denominated in SD units, then $\partial_x \ln r$ is the fractional change in growth rate due to a 1 SD change in annual precipitation, and $\partial_x \ln (r/K)$ is the fractional change in $r/K$ due to a 1 SD change in annual precipitation. Moreover, we need not be discouraged by the presence of $r/K$ as a unit in our model, because  
+
+$$\begin{align}
+\partial_x \ln(r/K)
+&= \frac{\partial_x(r/K)}{r/K} \\
+&= \frac{(\partial_x r)K^{-1} + r\partial_x (K^{-1})}{r/K}\\
+&=\frac{\partial_x r}{r} + \frac{\partial_x(K^{-1})}{K^{-1}}\\
+&=\partial_x \ln r\  + K(-1)K^{-2}\partial_x K\\
+&=\partial_x \ln r\  - \partial_x \ln K\\ \\
+\text{And therefore}\ \ \ \ 
+\partial_x \ln K &= \partial_x \ln r\  - \partial_x \ln(r/K)\\
+&= \beta_1/\beta_0 - \beta_3/\beta_2
+\end{align}$$  
+
+We see that the fractional change in carrying capacity $K$ due to 1 SD of annual rainfall is $\beta_1/\beta_0 - \beta_3/\beta_2$.  Therefore, the model in which carrying capacity is unaffected by rainfall is the model for which $\beta_3=\beta_1 \beta_2/\beta_0$. Evidently there are **three possible models:** the $\beta_3=\beta_1=0$ model, in which rainfall has no effect on growth rate or carrying capacity; the $0\ne \beta_3 = \beta_1\beta_2/\beta_0$ model in which rainfall affects only growth rate; and the $\beta_3 \ne \beta_1\beta_2/\beta_0$ model in which rainfall affects both growth rate and carrying capacity.  
+
+# Statistical models {-}  
+
+## A realistic model {-}  
+Assume that the data consist of counts from aerial photographs. In year $t$, $y(t)$ wildebeest are counted in a representative area $A(t)$ surveyed by small aircraft. The population **_density_** in units of wildebeest per km^2^ is the latent variable $N(t)$. The total population is $N(t)A_T(t)$ in which $A_T(t)$ is the total area occupied by wildebeest at time $t$, of which $A(t)$ is a small fraction.   
+
+## A simple model {-}  
+Our simple model resembles the model of H&H, Section 8.5.1, page 201. The unknown total population $N(t)$ is counted each year, but the count $y(t)$ is subject to **log**normal error.^[H&H assume Normal observational errors instead of lognormal, but if observational error is large this can occasionally lead to negative population counts, which is absurd.] In other words---see H&H page 201, equation (8.5.1)---the observed count $y(t)$, in units of a million animals, is a draw from a lognormal distribution with logscale parameters 
+$\ln N(t)$ and $\sigma_o$. Note that we denote observational error by $\sigma_o(t)$ instead of the $\sigma_{\text{data},t}$ used by H&H. The observational error is estimated separately and is part of the data for our simple model. The unknown true population $N(t)$ is a draw from a lognormal distribution with logscale mean $\mu_p(t)=\ln g(\pmb{\beta}, N_{t-1}, x_t)$ and logscale SD $\sigma_p$; the subcript $p$ is a reference to "process", as in "this is our process model, as distinct from our observation model". The function $g$ is Process model 2 given above:  
+
+$$
+\mu_p(t) = \ln g(\pmb{\beta},N_{t-1}, x_t) 
+= \ln N_{t-1} + \beta_0 + \beta_1 x_t 
+- \beta_2 N_{t-1} - \beta_3 x_t N_{t-1}
+$$  
+
+## BUGS models {-}  
+Before creating simulated data, we take a stab at a BUGS model. BUGS is declarative, and thus provides a clear guide to the code we will write to simulate the data. In the code, we use `b0` as a variable name instead of `beta_0` and similarly for the other betas. The model `bug2` is an alternative coding of `bug1`.      
+
+
+```{r bugWORKS3} 
+
+bug1 <- " model {
+
+/* observation loop */
+for (i in 1:Nt) {
+  y[i] ~ dlnorm(log(N[i]), 1/sigma_o^2)
+}
+
+/* process loop */
+for (i in 2:Nt) {
+  N[i] ~ dlnorm(mu_p[i], tau_p)
+  mu_p[i] <- # this is the log g(t) of H&H.  
+    log(N[i-1]) + b0 + b1*x[i] - b2*N[i-1] - ((b1*b2)/b0)*x[i]*N[i-1]
+}
+
+/* priors */  
+b0  ~ dgamma(eps, eps)  
+b2  ~ dgamma(eps, eps)  
+b1 ~ dnorm(-4, 4)    
+b3 ~ dnorm(-0.4, 0.4)   
+tau_p ~ dgamma(eps, eps)
+N[1]  ~ dgamma(eps, eps) 
+
+/* derived quantities */
+sigma_p <- 1/sqrt(tau_p)
+r <- b0
+dlnrdx <- b1/b0
+K <- b0/b2
+dlnKdx <- b1/b0 - ((b1*b2)/b0)/b2
+}"
+
+bug2 <- " model {
+
+/* observation loop */
+for (i in 1:Nt) {
+  y[i] ~ dlnorm(log(N[i]), 1/sigma_o^2)
+}
+
+/* process loop */
+for (i in 2:Nt) {
+  N[i] ~ dlnorm(mu_p[i], tau_p)
+  mu_p[i] <- # this is the log g(t) of H&H.  
+    log(N[i-1]) + r*(1 + b1*x[i]) - r/K*(1 + b3*x[i])*N[i-1]
+}
+
+/* priors */  
+r  ~ dgamma(eps, eps)  
+K  ~ dgamma(eps, eps)  
+b1 ~ dnorm(-4, 4)    
+b3 ~ dnorm(-0.04, 0.04)
+tau_p ~ dgamma(eps, eps)
+N[1]  ~ dgamma(eps, eps) 
+
+/* derived quantities */
+sigma_p <- 1/sqrt(tau_p)
+dlnrdx <- b1
+dlnKdx <- b1 - b3 
+}"
+
+```   
+
+
+# Data {-}  
+
+## Real data {-}  
+
+Data years: Judging from H&H page 207, Figure 8.5.3, the wildebeest were counted in years from 1961 to 2005, as shown in the table. We may use these data later if I can find the actual rainfall data to accompany them.  
+
+```{r datasHH}
+t <- 1960:2014
+Nt <- length(t)
+y <- rep(NA_real_, Nt) # observed population, millions
+y[t==1961] <- 0.25
+y[t==1963] <- 0.27
+y[t==1965] <- 0.40
+y[t==1967] <- 0.455
+y[t==1971] <- 0.535
+y[t==1972] <- 0.55
+y[t==1977] <- 1.45
+y[t==1978] <- 1.25
+y[t==1980] <- 1.35
+y[t==1982] <- 1.24
+y[t==1984] <- 1.30
+y[t==1986] <- 1.15
+y[t==1988] <- 1.40
+y[t==1991] <- 1.25
+y[t==1994] <- 0.90
+y[t==1999] <- 1.26
+y[t==2000] <- 1.25
+y[t==2003] <- 1.20
+y[t==2005] <- 1.08
+
+dfHH <- data.frame(t=t, y=y)
+
+if (c(TRUE, FALSE)[2]) # display data
+  df %>% 
+    kbl(caption="Serengeti wildebeest data from Hobbs & Hooten (2015).") %>%
+      kable_styling("hover", full_width = TRUE)
+```   
+
+## Simulated data {-}  
+
+For testing purposes, we now simulate a complete data set. Our choices for simulation parameters are as follows:  
+
+* $\beta_0=r=0.20$. Note that this results in a maximum growth rate (i.e., growth rate at zero population) of $e^r=1.22$.  
+* $K = 1.2$ million wildebeest. Therefore $\beta_2 = r/K = 0.2/1.2 = 1/6$.   
+* $\partial_x \ln r = 0.75$. Therefore $\beta_1=r\,\partial_x \ln r = (0.2)(0.75)=0.15$. 
+* $\beta_3 = \beta_1 \beta_2 / \beta_0 = (0.15)(1/6)/(0.2) = 0.125$ in order that rainfall affect only growth rate, not carrying capacity. Our analysis of the simulated data should therefore yield a very small value of $\partial_x \ln K$. By this choice we deliberately make our BUGS model unparsimonious. A more parsimonious model would replace $\beta_3$ by $\beta_1\beta_2/\beta_0$.  
+* $x_t \sim N(0,1)$. Remember, we agreed to standardize the rainfall data to zero mean and unit SD.  
+* $\sigma_o(t) = 0.1$. Remember $\sigma_o(t)$ is the estimated error of the _logarithm_ of the population in millions. Thus, for example, if the wildebeest population is 1 million, its logarithm is 0.  
+* $\sigma_p = 0.08$. This is what H&H found for the real data (Panel E of their Figure 8.5.2, p205).  
+
+```{r dataSim, fig.cap="Simulated wildebeest data. Green vertical lines indicate years in which standardized rainfall exceeded 1 SD and red vertical lines indicate years in which standardized rainfall was less than -1 SD. If rainfall affects growth rate $r$ then (in the absence of density effects and process error) green years would see a jump in population and red years a decline in population."}
+set.seed(3)
+## for model checking we make the following simulated data  
+b0 <- r <- 0.2
+dlnrdx <- 0.75
+b1 <- r*dlnrdx
+K  <- 1.2
+b2 <- r/K
+b3 <- b1*b2/b0
+dlnKdx <- b1/b0 - b3/b2
+
+x  <- rnorm(Nt, 0, 1)       # standardized rainfall data 
+sigma_o <- rep(0.1, Nt)     # can be different each year, in general
+sigma_p <- 0.08              # a constant, from H&H, panel E, p205
+
+y <- N <- rep(NA_real_, Nt) # use of NA_real_ instead of NA is just for fun...
+N[1] <- 0.2                 # ...It might save a millisecond or two.  
+for (i in 2:Nt) {
+  mnlog <- 
+    log(N[i-1]) + b0 + b1*x[i] - b2*N[i-1] - b3*x[i]*N[i-1]
+  N[i] <- rlnorm(1, mnlog, sigma_p)
+  y[i] <- rlnorm(1, log(N[i]), sigma_o[i])
+}
+y[1] <- y[2] 
+# df <- data.frame(t=1:Nt, x=x, y=y, sigma_o=sigma_o) # not needed
+
+if (c(TRUE, FALSE)[2]) # display data
+  df %>% 
+    kbl(caption="Simulated data for Serengeti wildebeest") %>%
+      kable_styling("hover", full_width = TRUE)
+
+## plot simulated data  
+mypar()
+
+## graph N[t], y[t]
+ylim <- c(0, 1.05*max(N, y[-1]))
+plot(1:Nt, N, pch=1, col="blue", bty="l", xaxs="r", yaxs="i", ylim=ylim,
+     xlab="time (years)", ylab="N, y  (millions)")
+points(2:Nt, y[-1], pch=4, col="black")  
+
+## rainfall
+abline(v=(1:Nt)[x >  1], col="green", lwd=0.50)
+abline(v=(1:Nt)[x < -1], col="red"  , lwd=0.25)  
+
+## re-plot N[t], y[t] to bring to top
+points(1:Nt, N, pch=1, col="blue")
+points(2:Nt, y[-1], pch=4, col="black")
+
+legend("bottom", inset=c(0.00, 0.05), horiz=FALSE, 
+       pch=c(       1,           4,        NA,        NA     ), 
+       col=c(     "blue",     "black",  "green",     "red"   ),
+       lwd=c(       NA,          NA,      1,           1     ), 
+       legend=c(  "N[t]",      "y[t]",  "x > 1",    "x < -1" )) 
+```  
+
+# JAGS {-}  
+
+In the following chunk we make lists of data and (perhaps) initial values for use with `run.jags()`.   
+
+```{r data&inits}
+data1 <- list(Nt=Nt,
+              N = N,
+              x=x, 
+              sigma_o = 0.1,
+              y=y, 
+              eps=0.01)
+n.chains <- 3
+#set.seed(1234)
+RNGs <- c("base::Super-Duper", "base::Wichmann-Hill", 
+          "base::Marsaglia-Multicarry", "base::Mersenne-Twister")
+RNGs <- rep(RNGs, 3) # allows up to 12 chains
+inits1 <- vector("list", length=n.chains)
+seeds <- c(1, 200, 30)
+for (ic in 1:n.chains) { # let JAGS choose initial values
+  inits1[[ic]] <- list(.RNG.name=RNGs[ic], .RNG.seed=seeds[ic])
+}
+```  
+
+In the following chunk we call `run.jags()` to process the data.  
+
+```{r runjags}
+
+
+rjo1 <- # S3 object of class "runjags"
+  run.jags(model = bug1, # <----------------- NB
+           silent.jags = FALSE,
+           data = data1,
+           n.chains = n.chains,
+           adapt = 500,
+           burnin = 1000,
+           sample = 3000,
+           method = "parallel",
+           inits = inits1,  # <---------------- NB
+           modules = "glm",
+           monitor = c("r","K", "dlnrdx", "dlnKdx", "sigma_p", "b2", "b1") # keep samples
+          )
+#monitor = c("r", "K", "dlnrdx", "dlnKdx", "sigma_p") # keep samples
+# If this crashes, type failed.jags() in the console for suggestions.  
+cleanup.jags() # cleanup any failed runs  
+# plot(rjo)    # summary plots
+```  
+
+In the following figure we graph the posterior densities.  
+
+```{r densities, fig.cap="Posterior densities of parameters in the wildebeest problem."}
+
+mypar(mfrow=c(2, 3), tcl=-0.3, xaxs="i", yaxs="i", mar=c(4, 1, 1.5, 1))
+
+sams <- as.matrix(rjo1$mcmc)
+
+for (nam in colnames(sams)) {  # loop over variable names/plot panels
+  den <- density(sams[ , nam]) # density histogram for nam
+  ylim <- c(0, max(den$y))
+  plot(den$x, den$y, type="l", lwd=1, col="black", ylim=ylim, 
+       main="", xlab="", ylab="", yaxt="n", bty="n")
+  title(#main=nam, cex.main=0.9, 
+         xlab=nam, cex.lab=1.2, line=1.8 ) 
+  ## median
+  med <- median(sams[ , nam])
+  abline(v=med, col="red", lty=2)
+  ## 95% HPDI
+  qs <- HDIofMCMC(sams[ ,nam]) 
+  lines(rep(qs[1], 2), c(0, ylim[2]/2), col="red")
+  lines(rep(qs[2], 2), c(0, ylim[2]/2), col="red")
+  ## true values (used to simulate)
+  xv <- switch(nam, "r" = r,
+                    "K" = K,
+                     "dlnrdx" = dlnrdx,
+                     "dlnKdx" = dlnKdx,
+                     "sigma_p" = sigma_p,
+                     "b2" = b2, 
+                     "b1" = b1,
+                     stop("Invalid `nam` value")
+               )
+  
+  lines(c(xv, xv), c(0, ylim[2]), col="skyblue", lwd=2)
+  ## re-plot density on top
+  lines(den$x, den$y)
+}
+
+plot(0, 0, type="n", xlim=c(0,1), ylim=c(0,1), axes=FALSE, xlab="", ylab="")
+  # text(0.5,0.5,"Put your\nlegend here")
+  legend("topright", bty="n", title="Posteriors", lty=c(1, 2, 1, 1), 
+       col=c("black", "red", "red", "skyblue"), cex=0.95,  
+       inset=c(0.03, 0.0), lwd=c(1, 1, 1, 2),
+       legend=c("density", "median", "95% HPDI", "true value"))
+```
+
+# Exercise 4 {-}  
+(55 pts) Imagine that the Serengeti wildebeest problem is your PhD thesis. The model above is obviously not working,^[I had it working at one point, but then I changed a few parameter values in the simulated data and could not get back to what worked. I ought to have kept a log.] so it's time to rethink. Is it because I used uninformative priors? (Recall that H&H used highly informative priors.) Is it because JAGS has two many variables to play with and too much process and observational error to sort them out? Would it be better to try a simpler model first in which the only parameters are $\beta_0=r$, (our) $\beta_2=r/K$---recall that our $\beta_2$ is H&H's $\beta_1$---and $\sigma_p$. See what you can do. Keep in mind that there may be a mistake in my math or my code, something hiding in plain sight. If so, it is unintentional. This exercise is genuine.   
+
+## Ex 4 solution {-}  
+(Make changes in the code and narrative above, but put your summary comments here. What did you try? What worked, if anything, and, equally important, what didn't work?) 
+
+**What worked:** I input `N` into the data1 list. I also narrowed the prior distributions from `b1 ~ dnorm(-40, 40)`, and `b3 ~ and dnorm(-40, 40)` to `b1 ~ dnorm(-4, 4)`, and `b3 ~ dnorm(-0.04, 0.04)`. At this point, using the `bugs1` model seemed to work, but it was sensitive to changes in the Jag's random number generator's seed value. On Prof. Neil's suggestion (you), I substituted $b_3$ for $b_1b_2/b_0$ so that Jags would have less parameters to estimate. With this, the bugs1 model seemed to work pretty well other than dlnKdx having multiple peaks. I could spend more time changing the $\beta$ priors to possibly ammend this. 
+
+**What probably didn't matter but I did it anyway:** I used a single 0.1 value for `sigma_o` rather than a vector. I set the burnin to 1000 rather than 3000. Once I gave Jags the `N` vector, I removed the first `N` value initialization as a pull from a gamma distribution (it still worked but I set it back to the way it was). I monitored more parameters (all the $\beta$ values) to see what could be causing issues. I set the fist value of `y` to the second value of `y` ie `y[1] <- y[2]`. I just wanted to initialize the first value with something not too far off. Otherwise `y[1]` is `NA`, and I'm not sure how Jags handles `y[1] ~ dlnorm(log(N[i]), 1/sigma_o^2)` when `y[1] = NA`. I also set sigma_p to 0.08 because that's whats on page 205 figure 8.2.1 in H&H. in the text you say you use 0.08, but in the data simulation you use 0.1, although I don't think it matters. 
+
+**What did not work:** I used sigma_p in place of tau in `N[i] ~ dlnorm(mu_p[i], tau_p)`. When that did not work, I also set `sigma_p` to $0.1$ rather than have it be a draw from a gamma distribution (still using `tau_p`). I I spent alot (alot) of time grounding many of the priors to their true values ie. `b0 = 0.2, k=1.2, b1=0.15, b2=0.16, sigma_p=0.1, and b3 = 0.125` in different combinations, and jumping back and forth between the models bugs1 and bugs2 in this way.
+
+**What could work but I'm out of time:** I'd like to try initializing some random numbers and broadening the $\beta$ priors to hopefully get the dlnKdx parameter to have only one peak. I also have not tried grounding some of the parameters to their true values (value before noise added), now that I have the model somewhat working.
+
+
+
+
+
+
+
+

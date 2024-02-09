@@ -1,0 +1,575 @@
+---
+title: "Ash_A06"
+author: "Jamie Ash"
+date: "due: 2021-02-27"
+output: 
+  #html_document: 
+  bookdown::html_document2:  
+    self-contained: yes
+    theme: cerulean #paper #cosmo #journal #readable
+    toc: true
+    smooth_scroll: true
+    toc_depth: 3
+    toc_float: true
+    number_sections: true
+    fig_caption: yes
+    code_folding: hide
+    # bibliography: ["geothermal.bib", "r.bib"]
+    # csl: apa-5th-edition.csl
+    # link-citations: yes
+---  
+
+<style type="text/css">  
+/* Note: CSS uses C-style commenting. */
+h1.title{font-size:22px; text-align:center;}
+h4.author{font-size:16px; text-align:center;}
+h4.date{font-size:16px; text-align:center;}
+body{ /* Normal  */ font-size: 13px}
+td {  /* Table   */ font-size: 12px}
+h1 { /* Header 1 */ font-size: 16px}
+h2 { /* Header 2 */ font-size: 14px}
+h3 { /* Header 3 */ font-size: 12px}
+.math{ font-size: 10pt;}
+.hi{ /* hanging indents */ 
+    padding-left:22px; 
+    text-indent:-22px;
+}
+blockquote {  
+    padding: 10px 20px;
+    margin: 0 0 20px;
+    font-size: 12px;
+    border-left: 5px solid #eee;
+}
+code.r{ /* code */ 
+       font-size: 12px;
+}
+pre{/*preformatted text*/ 
+    font-size: 12px;
+}
+p.caption {/* figure captions */ 
+    font-size: 1.0em;
+    font-style: italic; 
+} 
+</style>
+
+```{r setup, echo=FALSE}
+rm(list=ls()) # clean up
+
+## load packages quietly
+shhh <- suppressPackageStartupMessages # It's a library, so shhh!
+want <- c("knitr", "runjags", "coda", "MASS", "Matrix", "kableExtra",
+          "zeallot", "magrittr", "scdensity")
+for (pkg in want) shhh(library(pkg, character.only=TRUE))
+
+## set some chunk options
+gr <- (1+sqrt(5))/2 # golden ratio, for figures
+opts_chunk$set(comment="  ",
+               #echo=FALSE,
+               cache=c(TRUE, FALSE)[2], 
+               eval.after="fig.cap",
+               collapse=TRUE, 
+               dev="png",
+               fig.width=7.0,
+               out.width="95%",
+               fig.asp=0.9/gr,
+               fig.align="center"
+               )
+
+## Kruschke's utility functions (edited by NF for use in RMarkdown)
+if (c(TRUE,FALSE)[2]) source("DBDA2E-utilities.R") 
+
+## handy function to color text
+colorize <- function(x, color) {
+  ## x is a string
+  ## example:`r colorize("The assignment", "red")`
+  if (knitr::is_latex_output()) {
+    sprintf("\\textcolor{%s}{%s}", color, x)
+  } else if (knitr::is_html_output()) {
+    sprintf("<span style='color: %s;'>%s</span>", color, x)
+  } else x
+}
+
+mypar <- # Convenience wrapper for par()
+## Values are from Bloomfield (2014) "Using R for Numerical Analysis
+## in Science and Engineering." See ?par for meanings.
+function(mgp=c(2,0.5,0), mar=c(4,4,1.5,1.5), bty="l", 
+         bg=gray(0.97), tcl=0.3, mex=0.8, cex.main=0.9,
+         font.main=1,...) 
+  par(mgp=mgp, mar=mar, bty=bty, bg=bg, tcl=tcl, mex=mex,
+      cex.main=cex.main, font.main=font.main,...) 
+
+comma <- # dynamic numbers in narrative
+  function(x) format(x, digits = 2, big.mark = ",")
+# comma(3452345) # "3,452,345"
+# comma(.12358124331) # "0.12"
+
+## fresh start? 
+rmCache <- c(TRUE, FALSE)[2] 
+if (rmCache)
+  if (file.exists("Frazer_A05_cache")) 
+    unlink("Frazer_A05_cache", recursive=TRUE)
+```  
+
+\newcommand{\logit}{\mathrm{logit}}
+\newcommand{\expit}{\mathrm{expit}}
+\newcommand{\E}{\mathrm{E}}
+\newcommand{\Var}{\mathrm{Var}}
+\newcommand{\Corr}{\mathrm{Corr}}
+
+```{r HDMIofMCMC}
+HDIofMCMC <- function( sampleVec , credMass=0.95 ) {
+  # Computes highest density interval from a sample of representative values.
+  # Arguments:
+  #   sampleVec
+  #     is a vector of representative values from a probability distribution.
+  #   credMass
+  #     is a scalar between 0 and 1, indicating the mass within the credible
+  #     interval that is to be estimated.
+  # Value:
+  #   HDIlim is a vector containing the limits of the HDI
+  # Credit: John K. Kruschke, "Doing Bayesian Data Analysis, 2nd edition"
+  sortedPts <- sort( sampleVec )
+  ciIdxInc <- # How many sample elements are in the CI?
+    ceiling( credMass * length( sortedPts ) )
+  nCIs <-     # number of possible CIs
+    length( sortedPts ) - ciIdxInc
+  ciWidth <- rep( 0 , nCIs ) # create storage
+  for ( i in 1:nCIs ) {
+    ciWidth[ i ] <- # last value in CI - first value in CI
+      sortedPts[ i + ciIdxInc ] - sortedPts[ i ]
+  } # end for
+  HDImin <- sortedPts[ which.min( ciWidth ) ]
+  HDImax <- sortedPts[ which.min( ciWidth ) + ciIdxInc ]
+  HDIlim <- c( HDImin , HDImax )
+  return( HDIlim )
+} 
+``` 
+
+# Goals {-}   
+The goals of this assignment are: (1) Discover the natural conjugate prior for a Normal distribution with known mean but unknown precision. (2) Practice JAGS with a simple linear regression. (3) Demonstrate how to make regression more robust to outliers by assuming Student-t noise instead of Normal noise.           
+
+# Tiny tips {-}  
+- Use `*` for multiplication in code, but not in math. In math, the asterisk means either convolution or some other esoteric product. When you want to be explicit about multiplication in math use `\cdot` or `\times`.  
+- If an equation has `$$` around it in the knit, but is otherwise OK, you have one or more blank lines in your LaTeX. Put the LaTeX comment symbol `%` at the beginning of each blank line and the `$$` will go away.   
+- To move the x-axis label closer to the axis, set `xlab=""` in the `plot()` call, and then call `title(xlab="something", line=1.8)`. Reduce (increase) the value of the `line` argument to move it closer (farther) from the axis.  
+- A number or data set should be read in or assigned only once, and thereafter should be referred to by name.   
+- To get a grid on a plot, make `panel.first=grid()` an argument in your call to `plot()`. Nearly all of my plots do this.   
+- Just so you know, the convention in science is that figures should have titles (the `main` argument in `plot()`) when you are making slides, and captions when you are making a document. For documents, the main use of `main`, so to speak, is to identify subpanels of a plot with (a), (b), (c) and so forth.  
+- When plotting a continuous function on a domain of integer length (e.g., 0:10) it is best to use 101 or 201 rather than 100 or 200. The extra "1" is there so that the intervals are simple. Thus `x <- seq(0,10,len=100)` gives you intervals of length `r diff(seq(0,1,len=100)[1:2])`, but `x <- seq(0,10,len=101)` gives you intervals of length `r diff(seq(0,1,len=101)[1:2])`. Moreover, it is best to use 201 rather than 101, as on modern screens the use of 101 can make a continuous function look piecewise linear.  
+- That last point also applies to `curve()`. The default number of points in `curve()` is 101, so put `n=201` in your call, like this `curve(sin(x), 0, 2*pi, n=201)` or this `curve(dnorm(x, mean=3, sd=2), 0, 6, n=201)`. 
+- In bookdown, figures, tables and equations are referenced by their chunk labels. For example, if you make a figure in a chunk with label `Ex3` (a thing I often do) then you can get the number of that figure in your narrative by typing `\@ref(fig:Ex3)`. For this reason it is a good idea to name a chunk for the figure it makes.   
+- To put a dynamic number in narrative I've been using `round()` and `signif()`, but maybe I should be using `format()`. Here is a handy function with examples from the book [R for Data Science](https://r4ds.had.co.nz/r-markdown.html). It is in the setup chunk above.    
+```
+comma <- function(x) format(x, digits = 2, big.mark = ",")
+comma(3452345)
+#> [1] "3,452,345"
+comma(.12358124331)
+#> [1] "0.12"
+```  
+- For multiple independent samples $y_i,y_2,\ldots,y_N$, the sampling distribution/likelihood is always a product of the sampling distribution/likelihoods for each sample. Thus  
+$$\begin{align}
+p(y_1,y_2,\ldots,y_N|\beta) 
+&= p(y_1|\beta)p(y_2|\beta)\cdots p(y_N|\beta) \\
+&=\prod_{i=1}^N p(y_i|\beta)
+\end{align}$$  
+Write the left hand side of this equation as $p(\pmb{y}|\theta)$ if you like, but do _not_ write it as $p(y_i|\theta)$.  
+
+
+# Exercise 1. {-}  
+(10 pts) 
+**(a)** In a setup chunk, what is the effect of `opts_chunk$set(cache=TRUE)`. **(b)** Explain the chunk option `dependson`. **(c)** Near the bottom of the setup chunk in this Rmd is some code that looks like this: 
+
+```
+## fresh start? 
+rmCache <- c(TRUE, FALSE)[1] 
+if (rmCache)
+  if (file.exists("Frazer_A06_cache")) 
+    unlink("Frazer_A06_cache", recursive=TRUE)
+```  
+What does it do? Why should it be unnecessary?  
+
+**Answer Ex1:** **(a)** The `opts_chunk$set` is used to set global Rmarkdown options that apply to every chunk in the file. The `opts_chunk$set(cache=TRUE)` "turns on" knitr caching to improve performance for code chunks that perform long computations that would otherwise be time consuming. If `chache = TRUE`, then when a code chunk is run knitr will check to see if the code chunk's syntax has changed since subsequent runs, and if it has not changed then knitr will use the objects that where the product of the previous runs (saved on a specified disk) rather than re-run the potentially arduous computation. **(b)** As it's name implies, the `dependson` argument in Rmarkdowns chunk options allows desired code chunks to be dependent on other chunks for the purpose of caching. Used alone `cache=TRUE` will only 'check' the code chunk it is set to for changes, but will not detect any changes in objects created in other code chunks that the `cache=TRUE`'s chunk is dependent on. When `dependson` argument is set to the name of a previous chunk such as `dependson = c("dependent_chunk_name")` then the current chunk will be rerun if any changes are detected in the chunks set using `dependson`. **(c)** If cache exists in the current working directory for the assignment "X_A06_cache", where X is the student's name, then the `fresh start?` code will clear that cache using unlink(X_A06_cache, recursive =TRUE). The `recursive=TRUE` argument will dig into all sub folders within the set directory. It should be unnecessary because if cache already exists for the given file it will be written over anyhow, and if cache does not exist it will be created.  
+
+# Exercise 2. {-}  
+(20 pts) Recall that the kernel of a PDF is what you have left after dropping any factors that do not contain parameters. **(a)** What is the kernel of a Normal distibution $N(y|\mu,\tau)$ for which the mean $\mu$ is known but the precision, $\tau$, is unknown? **(b)** What is the kernel of the associated sampling distribution/likelihood for data $y_1, y_2,\ldots,y_N$ ? **(c)** Show that the natural conjugate prior of that likelihood is the gamma distribution. **(d)** By comparing the precision of the posterior with the expected precision $N \left[\Sigma_i (y_i-\mu)^2\right]^{-1}$ (notice that this is the reciprocal of the familiar expression for variance) show that the uninformative prior here is the reciprocal distribution $\tau^{-1}$.  
+
+**Answer Ex2 (a) and (b):** First I found the likelihood of the Normal distribution with a known mean $u_0$ by multiplying the PMF by self many times. **(a)** Then I found the kernel of the likelihood function to be $\tau^{N-1}\exp(-\tau\Sigma_i^N(y_i - \mu_0)^2/2)$ by dropping all factors that did not contain parameters. 
+
+$$\begin{align}
+&N(y|\mu_0,\tau) = \frac{\sqrt{\tau}}{\sqrt{2 \pi}} \exp(-\tau(y-\mu_{0})^2/2)
+&\textrm{Normal probability distribution function} \\
+&N(y|\mu_0,\tau) = \frac{\sqrt{\tau}}{\sqrt{2 \pi}} \exp(-\tau(y^2-2\mu_0y+\mu_0^2)/2)
+&\textrm{FOIL} \\
+&\Pi_{i}^{N}N(y|\mu_0,\tau)=\Pi_{i}^{N}\frac{\sqrt{\tau}}{\sqrt{2 \pi}}\exp(-\tau(y^2-2\mu_0y+\mu_0^2)/2)
+&\textrm{Product from i to N} \\
+&\frac{\sqrt{\tau}}{\sqrt{2 \pi}}\exp(-\tau(y_1^2-2\mu_0y_1+\mu_0^2)/2) \times \frac{1}{\sqrt{2 \pi \tau}}\exp(-\tau(y_2^2-2\mu_0y_2+\mu_0^2)/2)...
+&\textrm{Example of first two products} \\
+&\frac{\sqrt{\tau}}{\sqrt{2 \pi}} \times \frac{\sqrt{\tau}}{\sqrt{2 \pi}} \exp(-\tau(\frac{(y_1^2-2\mu_0y_1 + \mu_0^2)}{2} +\frac{(y_2^2-2\mu_0y_2+\mu_0^2)}{2}))
+&\textrm{Combine like terms} \\
+&\Pi_{i}^{N}N(\mu|\mu_0,\tau)=\frac{\tau^{N-1}}{2\pi^{N-1}}\exp(-\tau(\Sigma y_i^2-2\mu_0 \Sigma y_i+N\mu_0^2)/2)\\
+&\Pi_{i}^{N}N(\mu|\mu_0,\tau)=\tau^{N-1}\exp(-\tau(\Sigma y_i^2-2\mu_0 \Sigma y_i+N\mu_0^2)/2)
+&\textrm{Drop terms without parameters} \\
+&\tau^{N-1}\exp(-\tau\Sigma_i^N(y_i - \mu_0)^2/2)
+&\textrm{Kernel of the likelihood} \\
+\end{align}$$ 
+
+**Answer Ex2 (c):** To show that the natural conjugate prior of the likelihood is the gamma distribution, I multiplied the kernel of the Normal likelihood function by the kernel for a gamma distribution as shown bellow. Then I compared the general form of the product to the gamma distribution, and found they were very similar to a gamma distribution, implying that the natural conjugate prior for a normal distribution is a gamma distribution. 
+
+$$\begin{align}
+&\tau^{N-1}\exp(-\tau\Sigma(y_i - \mu_0)^2/2) \times \lambda^{\alpha-1}e^{-\beta\lambda}\\
+&\lambda^{\alpha-1}\tau^{N-1}\exp(\frac{-\tau\Sigma(y_i - \mu_0^2)}{2}-\beta\lambda)
+\end{align}$$ 
+
+**Answer Ex2 (d):** When there is no prior information, N=0, \beta = 0, and \alpha = 0 then the precision of the posterior distribution, $\tau^{N-1}\exp(\frac{-\tau\Sigma(y_i - \mu_0^2)}{2}-\beta\lambda)$,  simplifies to $\tau^{0-1}\exp(0)$ or the reciprocal distribution $\tau^{-1}$.
+
+# Exercise 3. {-}  
+(10 pts) In the chunk that makes the simulated data for A05.Ex5, there are some lines of code that read as follows:  
+
+```{r, Ex3, fig.cap="Histogram of two simulated data sets. First, 101 samples of 0.1 and 0.6 where taken to create the grey data. Then 101 samples where taken from a Normal distribution with a standard devation equal to the values of the grey data set, and a arbitrary mean of 2"}  
+set.seed(13456)
+t     <- seq(0, 10, len=101)
+sd    <- c(0.1, 0.6)
+sd1   <- sample(sd, size=length(t), prob=c(9, 1), replace=TRUE)
+noise <- rnorm(length(t), mean=2, sd=sd1)
+
+hist(sd1, xlim=c(-0.5, 3.5), col="grey69", breaks = 2)
+hist(noise,add=TRUE, col="lightblue", breaks=10)
+```  
+
+**(a)** Graph `sd1` and `noise` on the same axes, changing the mean of the noise from 0 to 2 so the two graphs do not interfere. **(b)** What useful feature of `rnorm()` is demonstrated by this? (Don't overthink.) **(c)** What general category of noise distribution are we using here? (Hint: It begins with the letter "m".)  
+
+**Answer Ex3:** **(b)** When using `rnorm` to simulate noise or to produce another synthetic data set, regardless of the distribution of the true population (here `sd1`), the sample population will be normally distributed (here `noise`). **(c)** The category of noise distribution is Multiplicative noise. 
+
+# Exercise 4. {-}  
+(30 pts) **(a)** Generate and plot 50 simulated data points of the form $y=a + bt + \text{noise}$ on the interval $0\le t\le 10$ with $a=1$, $b=0.5$, and noise as in the previous exercise. **(b)** Analyze the data with JAGS, assuming that the noise is from a normal distribution with unknown precision. Use uniform priors for $a$ and $b$, and a gamma(0.001, 0.001) prior for $\tau$. Monitor $a$, $b$, and $\sigma=\tau^{-1/2}$. **(c)** Plot posterior densities of those quantities, indicating medians, 95% HPDIs and the true values. **(d)** Re-plot the simulated data adding $y=a+bt$ in red with the posterior median estimates of $a$ and $b$, and in skyblue using the true values of $a$ and $b$. Hint: Your BUGS model is pretty much the same as the sample problem in the JAGS manual.   
+
+# Solution to Ex4 {-}  
+Simulate the synthetic data set
+```{r, Ex4a}
+set.seed(13456)
+
+#function for linear model. t is seq of x, 
+f  <- function(t, ab, i) ab[i, "a"] + t*ab[i, "b"]
+
+## intercepts and slopes, and times to sample t. 
+ab <- data.frame(a=c(1), b=c(0.5))
+t  <- seq(0, 10, len=101) #X sequence. Length is arbitrary
+
+## Creating noise. The mean. What mean to use. 
+mu    <- f(t, ab, 1) # + (t > cp[1])*f(t2, ab, 2) + (t > cp[2])*f(t3, ab, 3)
+sd    <- sample(c(0.1, 0.6), size=length(t), prob=c(9, 1), replace=TRUE) #The noise
+noise <- rnorm(length(t), mean=0, sd=sd) 
+
+#The Data
+y <- mu + noise
+```
+
+**Answer Ex4 (a):** Plot simulated date
+```{r, Ex4b, fig.asp=0.75, fig.cap="A linear regression of the true mean (red line) for the simulated dataset, f(t) across t, as depicted by the black dots."}
+xlab <- expression(italic(t))
+ylab <- expression(italic(f(t)))
+
+plot(t, y, type="p", pch=20, xlab="", ylab="", ylim=c(0, max(y)),  
+     panel.first=grid(), cex.lab=1.1)
+title(main="Synthetic data: f(t) and t", xlab=xlab, ylab=ylab, cex.lab=1.2)
+lines(t,mu, col='red')
+```
+
+Bugs Model
+```{r, Ex4c}
+bug1 <- "model {
+  for (i in 1:N) {
+  y[i] ~ dnorm(mu[i], tau)
+  mu[i] <- a + b * t[i]
+  }
+  a ~ dunif(-5, 5)
+  b ~ dunif(-5, 5)
+  sigma <- 1.0/sqrt(tau)
+  tau ~ dgamma(1.0E-2, 1.0E-2)
+}"
+```
+
+Initial Values
+```{r, Ex4d}
+
+set.seed(987)
+nChains <- 3
+RNGs    <- c("base::Super-Duper", "base::Wichmann-Hill", 
+          "base::Marsaglia-Multicarry", "base::Mersenne-Twister")
+RNGs    <- rep(RNGs, 3) # allows up to 12 chains
+inits   <- vector("list", nChains)
+
+for (ic in 1:nChains) {
+  
+  a   <- runif(1, -5, 5) #could be rnorm to match model
+  b   <- runif(1, -5, 5) #could be rnorm to match model
+  tau <- rgamma(1, shape=0.01, rate=0.01)
+
+  inits[[ic]] <- list(a   = a,
+                      b   = b,
+                      tau = tau)
+  }
+``` 
+
+List of data  
+```{r, Ex4e}
+
+N <- length(t)
+
+data_1 <- list(t = t,
+               y = y, 
+               N = N
+               )
+
+``` 
+
+**Answer Ex4 (b):** Analyze the data with JAGS  
+```{r, Ex4f}
+#rjo <- # S3 object of class "runjags"
+#  run.jags(
+#           monitor = c("cp", "a", "b", "tau") # keep samples for these 
+#          )
+# If this crashes, type failed.jags() in the console for suggestions.
+set.seed(987)
+burnin <- 1000
+rjo <-
+  run.jags(model = bug1,
+           silent.jags = TRUE,
+           data = data_1,
+           n.chains = 3,
+           adapt = 500,
+           burnin = burnin,
+           sample = 3000, #change this, something is making this take too long?
+           method = "parallel",
+           inits = inits,
+           modules = "glm",
+           monitor = c("a", "b", "tau") # keep samples for these variables
+          )
+
+cleanup.jags() # cleanup any failed runs  
+#plot(rjo)    # summary plots
+```  
+
+**Answer Ex4 (c):** Plotting posteriors
+```{r, Ex4g, fig.asp=0.3, fig.cap="Posterior densities of parameters in a changepoint problem with two change points. The intercept is a and the slope is b. The noise in the BUGS model was assumed to be additive from a Normal distribution with known persicion tau. The true noise, i.e., the noise used to generate the simulated data, was a mixture of normals with 90% sd=0.1 and 10% sd=0.6 - N. Frazer"}
+dof   <- 3
+sams1 <- as.matrix(rjo$mcmc) # extract samples 
+## add SD as a column
+sams  <- cbind(sams1, sd=sqrt(dof/(dof-2)/sams1[,"tau"]))
+## delete the tau column
+sams  <- sams[ , colnames(sams) != "tau"] 
+med   <- {}
+names <- c("a", "b", "sd")
+
+## plot prep
+mypar(mfrow=c(1, 3), tcl=-0.3, xaxs="i", yaxs="i",
+      mar=c(4, 1, 1.5, 1))
+for (nam in colnames(sams)) { # loop over variable names/plot panels
+  
+  den      <- density(sams[ , nam]) # density histogram for nam
+  ylim     <- c(0, max(den$y)) #ylimit for HPDI lines
+  med[nam] <- median(sams[ , nam]) #median
+  qs       <- HDIofMCMC(sams[ ,nam]) # 95% HPDI
+  
+  plot(den$x, den$y, type="l", lwd=1, col="black", ylim=ylim, 
+       main=paste("Posterior for", nam), 
+       xlab="", ylab="")
+  title(#main=nam, cex.main=0.9, 
+         xlab=nam, cex.lab=1.2, line=1.8 ) 
+  abline(v=med[nam], col="red", lty=2)   ## median
+  lines(rep(qs[1], 2), c(0, ylim[2]), col="red")# 95% HPDI
+  lines(rep(qs[2], 2), c(0, ylim[2]), col="red")# 95% HPDI
+  lines(den$x, den$y) ## re-plot density on top
+  legend("topright", bty="n", title="Posteriors", lty=c(1, 2, 1, 1), 
+  col=c("black", "red", "red", "skyblue"), cex=0.95,  
+  inset=c(0.03, 0.0), lwd=c(1, 1, 1, 2),
+  legend=c("density", "median", "95% HPDI", "true"))
+}
+
+```  
+
+**Answer Ex4 (d):** Re-plot the simulated data 
+```{r, Ex4h, fig.asp=0.75, fig.cap="A comparison of the BUGS/JAGS model output of a linear regression (skyblue line) and the true mean (red line). The simulated dataset, f(t) across t, is depicted as the black dots."}
+b2  <- med[[2]]
+a2  <- med[[1]]
+mu2 <- a2 + t*b2
+
+xlab <- expression(italic(t))
+ylab <- expression(italic(f(t)))
+plot(t, y, type="p", pch=20, xlab="", ylab="", ylim=c(0, max(y)),  
+     panel.first=grid(), cex.lab=1.1)
+title(main="Synthetic data: f(t) and t", xlab=xlab, ylab=ylab, cex.lab=1.2)
+lines(t,mu, col='red')
+lines(t,mu2, col='skyblue')
+```
+
+# Exercise 5. {-}  
+(30 pts) Analyze the same data as in Ex 4, making the same plots and so forth, but with a BUGS model whose noise is a Student-t distribution with three degrees of freedom. Are your estimates of $a$ and $b$ more accurate?  
+
+Model String
+```{r EX5a}
+bug1 <- "model {
+  for (i in 1:N) {
+  y[i] ~ dt(mu[i], tau, dof)
+  mu[i] <- a + b * t[i]
+  }
+  a ~ dunif(-5, 5)
+  b ~ dunif(-5, 5)
+  sigma <- 1.0/sqrt(tau)
+  tau ~ dgamma(1.0E-2, 1.0E-2)
+}"
+```
+
+Initialize Values
+```{r Ex5b}
+set.seed(987)
+nChains <- 3
+RNGs    <- c("base::Super-Duper", "base::Wichmann-Hill", 
+          "base::Marsaglia-Multicarry", "base::Mersenne-Twister")
+RNGs    <- rep(RNGs, 3) # allows up to 12 chains
+inits   <- vector("list", nChains)
+
+for (ic in 1:nChains) {
+  
+  a   <- runif(1, -5, 5)
+  b   <- runif(1, -5, 5)
+  tau <- rgamma(1, shape=0.01, rate=0.01)
+
+  inits[[ic]] <- list(a   = a,
+                      b   = b,
+                      tau = tau)
+  }
+``` 
+
+List of data  
+```{r Ex5c}
+dof <- 3
+N   <- length(t)
+
+data_1 <- list(t   = t,
+               y   = y, 
+               N   = N,
+               dof = dof
+               )
+
+```
+
+Analyze the data with JAGS  
+```{r Ex5d}
+#rjo <- # S3 object of class "runjags"
+#  run.jags(
+#           monitor = c("cp", "a", "b", "tau") # keep samples for these 
+#          )
+# If this crashes, type failed.jags() in the console for suggestions.
+set.seed(987)
+burnin <- 1000
+rjo <-
+  run.jags(model = bug1,
+           silent.jags = TRUE,
+           data = data_1,
+           n.chains = 3,
+           adapt = 500,
+           burnin = burnin,
+           sample = 3000, #change this, something is making this take too long?
+           method = "parallel",
+           inits = inits,
+           modules = "glm",
+           monitor = c("a", "b", "tau") # keep samples for these variables
+          )
+
+cleanup.jags() # cleanup any failed runs  
+#plot(rjo)    # summary plots
+```  
+
+Plotting posteriors
+```{r Ex5e, fig.asp=0.4, fig.cap="Posterior densities of parameters in a changepoint problem with two change points. The intercept is a and the slope is b. The noise in the BUGS model was assumed to be additive from a Student-t distribution with 3 degrees of freedom. The true noise, i.e., the noise used to generate the simulated data, was a mixture of normals with 90% sd=0.1 and 10% sd=0.6 - N. Frazer"}
+dof   <- 3
+sams1 <- as.matrix(rjo$mcmc) # extract samples 
+## add SD as a column
+sams  <- cbind(sams1, sd=sqrt(dof/(dof-2)/sams1[,"tau"]))
+## delete the tau column
+sams  <- sams[ , colnames(sams) != "tau"] 
+med2  <- {}
+names <- c("a", "b", "sd")
+
+## plot prep
+mypar(mfrow=c(1, 3), tcl=-0.3, xaxs="i", yaxs="i",
+      mar=c(4, 1, 1.5, 1))
+for (nam in colnames(sams)) { # loop over variable names/plot panels
+  
+  med2[nam] <- median(sams[ , nam]) ## median
+  qs        <- HDIofMCMC(sams[ ,nam])   # 95% HPDI
+  den       <- density(sams[ , nam]) # density histogram for nam
+  ylim      <- c(0, max(den$y))
+  
+  plot(den$x, den$y, type="l", lwd=1, col="black", ylim=ylim, 
+       main=paste("Posterior for", nam), 
+       xlab="", ylab="")
+  title(xlab=nam, cex.lab=1.2, line=1.8 ) 
+  abline(v=med2[nam], col="red", lty=2) ## median 
+  lines(rep(qs[1], 2), c(0, ylim[2]), col="red")  # 95% HPDI
+  lines(rep(qs[2], 2), c(0, ylim[2]), col="red")  # 95% HPDI
+  lines(den$x, den$y) # re-plot density on top
+  legend("topright", bty="n", title="Posteriors", lty=c(1, 2, 1, 1), 
+  col=c("black", "red", "red", "skyblue"), cex=0.95,  
+  inset=c(0.03, 0.0), lwd=c(1, 1, 1, 2),
+  legend=c("density", "median", "95% HPDI", "true"))
+}
+
+```  
+
+Re-plot the simulated data 
+```{r, Ex5f, fig.asp=0.75, fig.cap="A comparison of the BUGS/JAGS model output of a linear regression (skyblue line) and the true mean (red line). The simulated dataset, f(t) across t, is depicted as the black dots."}
+b2  <- med[[2]]
+a2  <- med[[1]]
+mu2 <- a2 + t*b2
+
+xlab <- expression(italic(t))
+ylab <- expression(italic(f(t)))
+plot(t, y, type="p", pch=20, xlab="", ylab="", ylim=c(0, max(y)),  
+     panel.first=grid(), cex.lab=1.1)
+title(main="Synthetic data: f(t) and t", xlab=xlab, ylab=ylab, cex.lab=1.2)
+lines(t,mu, col='red')
+lines(t,mu2, col='skyblue')
+```
+
+Was `dt` or `dnorm` better at modeling noise when estimating a and b. 
+```{r, Ex5g}
+adt <- med2[[1]]
+bdt <- med2[[2]]
+adn <- med[[1]]
+bdn <- med[[2]]
+a <- 1.0
+b <- 0.5
+
+error <- rep(0, 4)
+error[1] <- abs((a - adt)/a)*100
+error[2] <- abs((b - bdt)/b)*100
+error[3] <- abs((a - adn)/a)*100
+error[4] <- abs((b - bdn)/b)*100
+errors <- data.frame(adt = error[1], bdt = error[2], adn = error[3], bdn = error[4])
+```
+
+**Answer Ex5:** When using a normal distribution to model the noise of my synthetic data set, the percent error for the calculated parameters $a$ and $b$ are `r errors$adn` and `r errors$bdn` respectively. When using a student t-distribution to model the noise of my synthetic data set, the percent error for the calculated parameters $a$ and $b$ are `r errors$adt` and `r errors$bdt` respectively. So, by modeling the noise with a student t-distribution, the estimated values for $a$ and $b$ are more accurate. 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

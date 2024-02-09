@@ -1,0 +1,818 @@
+---
+title: "Ash_A04"
+author: "Jamie Ash"
+date: "due: 2021-02-13"
+output: 
+  #html_document: 
+  bookdown::html_document2:  
+    self-contained: yes
+    theme: cerulean #paper #cosmo #journal #readable
+    toc: true
+    smooth_scroll: true
+    toc_depth: 3
+    toc_float: true
+    number_sections: true
+    fig_caption: yes
+    code_folding: hide
+    # bibliography: ["geothermal.bib", "r.bib"]
+    # csl: apa-5th-edition.csl
+    # link-citations: yes
+---  
+
+<style type="text/css">  
+/* Note: CSS uses C-style commenting. */
+h1.title{font-size:22px; text-align:center;}
+h4.author{font-size:16px; text-align:center;}
+h4.date{font-size:16px; text-align:center;}
+body{ /* Normal  */ font-size: 13px}
+td {  /* Table   */ font-size: 12px}
+h1 { /* Header 1 */ font-size: 16px}
+h2 { /* Header 2 */ font-size: 14px}
+h3 { /* Header 3 */ font-size: 12px}
+.math{ font-size: 10pt;}
+.hi{ /* hanging indents */ 
+    padding-left:22px; 
+    text-indent:-22px;
+}
+blockquote {  
+    padding: 10px 20px;
+    margin: 0 0 20px;
+    font-size: 12px;
+    border-left: 5px solid #eee;
+}
+code.r{ /* code */ 
+       font-size: 12px;
+}
+pre{/*preformatted text*/ 
+    font-size: 12px;
+}
+p.caption {/* figure captions */ 
+    font-size: 1.0em;
+    font-style: italic; 
+} 
+</style>
+
+```{r setup, echo=FALSE}
+rm(list=ls()) # clean up
+library(Matrix)
+library(knitr)
+library(magrittr)
+library(coda)
+library(MASS)
+#library(kableExtra)
+library(ggplot2)
+library(zeallot)
+library(scdensity)
+library(runjags)
+library(gridExtra)
+library(data.table)
+
+## load packages quietly
+shhh <- suppressPackageStartupMessages # It's a library, so shhh!
+want <- c("knitr", "runjags", "coda", "MASS", "Matrix", "kableExtra",
+          "zeallot", "magrittr", "scdensity")
+#for (pkg in want) shhh(library(pkg, character.only=TRUE))
+
+## set some chunk options
+gr <- (1+sqrt(5))/2 # golden ratio, for figures
+#opts_chunk$set(comment="  ",
+#               #echo=FALSE,
+#               cache=c(TRUE, FALSE)[1], 
+#               eval.after="fig.cap",
+#               collapse=TRUE, 
+#               dev="png",
+#               fig.width=7.0,
+#               out.width="95%",
+#               fig.asp=0.9/gr,
+#               fig.align="center"
+#               )
+
+## Kruschke's utility functions (edited by NF for use in RMarkdown)
+#if (c(TRUE,FALSE)[2]) source("DBDA2E-utilities.R") 
+
+## handy function to color text
+colorize <- function(x, color) {
+  ## x is a string
+  ## example:`r colorize("The assignment", "red")`
+  if (knitr::is_latex_output()) {
+    sprintf("\\textcolor{%s}{%s}", color, x)
+  } else if (knitr::is_html_output()) {
+    sprintf("<span style='color: %s;'>%s</span>", color, x)
+  } else x
+}
+
+mypar <- # Convenience wrapper for par()
+## Values are from Bloomfield (2014) "Using R for Numerical Analysis
+## in Science and Engineering." See ?par for meanings.
+function(mgp=c(2,0.5,0), mar=c(4,4,1.5,1.5), bty="l", 
+         bg=gray(0.97), tcl=0.3, mex=0.8, ...) 
+  par(mgp=mgp, mar=mar, bty=bty, bg=bg, tcl=tcl, mex=mex, ...) 
+
+## fresh start? (This should not be necessary.)
+rmCache <- c(TRUE, FALSE)[1] 
+if (rmCache)
+  if (file.exists("Ash_A04_cache")) 
+    unlink("Ash_A04_cache", recursive=TRUE)
+```  
+
+\newcommand{\logit}{\mathrm{logit}}
+\newcommand{\expit}{\mathrm{expit}}
+
+# Score & comments {-}  
+
+Score:  95/100 (10 bonus points for looping over SD)
+
+Ex 1. Nice looking plot, informative caption, and nicely formatted code. Also, a nice job on the legend using `as.character(round(METCI, 2))`.  
+Here are some minor points, which, as a journeyman scientist, you will want be aware of:  
+
+- The correct spelling is Haldane, not Helden.  
+
+- In the statement `quant <- c(0.025, 0.5, 0.975)`, most data analysts would use a name like `probs` or `prob` rather than `quant`, because the quantiles are _what you get_ when you apply the inverse CDF function (quantile function) to the probability values `c(0.025, 0.5, 0.975)`. Your statement `METCI <- qbeta(quant, shape1 = alpha_p, shape2 = beta_p)` would thus become `quant <- qbeta(prob, shape1 = alpha_p, shape2 = beta_p)`.  
+
+- The sentence "The 0.025, 0.5, and 0.975 equal tailed intervals are 0.41, 0.56, and 0.71 respectivly" isn't quite right, because an interval is necessarily specified by _two_ numbers. It would be correct to say "The median is 0.56, and the 95% equal-tailed interval is (0.41, 0.71)."  
+
+- In your narrative following the figure use  "r round(METCI,2)" or "r signif(METCI,2)" or "r format(METCI,2)" instead of "r METCI" to suppress the spurious extra digits.  
+
+Ex 2. (Comments similar to those for Ex 1.) The function `HDIofICDF()` doesn't give you a median, but you can use `qbeta()` like you did in Ex 1, like this: `med <- qbeta(0.5, shape1=alpha_p, shape2=beta_p)`.  
+
+Ex 3. Your code still had a few crashes, though not as many as before. Anyway, I was able to get rid of _all_ crashes by changing your inits to 
+```
+inits2 <- vector(mode="list", length=nChains) # pre-allocate
+for (ic in 1:nChains) {
+  p <- runif(nrow(df), 0.9*df$y/df$n, 1.1*df$y/df$n)
+  inits2[[ic]] <- list( p        = p       ,
+                       .RNG.name = RNGs[ic],
+                       .RNG.seed = ic +1   )
+}
+```  
+In the past I have not had anywhere near this degree of trouble with initial values. In view of our experience with the multilevel model of this exercise, my tentative conclusion is that it is best to initialize _one_ stochastic variable near enough to the data that you can use the data to guess a reasonable value, and let JAGS initialize the remaining variables.   
+
+Ex 3(d) You wrote "I spend way to long attempting to display the above table in the last plot box of the Hawaiian Island pdf figure," but you weren't asked to put a table there, just a legend to identify the various colored lines common to each subpanel. See the solutions. The table you printed is a good start (nice use of `kable()`) but the numbers should be rounded to suppress spurious digits.    
+
+Ex 3(e). The black and skyblue curves are correct, but the "Lanai (with) Haldane (prior)" is incorrect. It is the beta with shape1 = y = 1, shape2 = n-y = 3-1 = 2. See the solutions for how I handled this.  
+
+Ex 4. It's great that you looped over SD for both the BC and NBC! I was too lazy to do that. Moreover, my code had a mistake that caused the true SD to be frozen at 0.5 when I thought it was being changed to various other values. After reading Runze's solutions I went back and found my mistake. One question: both Runze and I found that our NBCs had a higher(!) success rate than our BCs. I don't know why. Your NBC had a lower success rate than your BC, but I find your NBC code difficult to follow, so I am not sure what is going on. Take a glance at my NBC code, which is considerably simpler than yours.  
+
+-Neil  
+
+# Goals {-}   
+The goals of this assignment are: (1) show that the beta prior is conjugate to the binomial likelihood, (2) show that the uninformative prior for a probability $p$ is the (improper) Haldane prior $p^{-1}(1-p)^{-1}$, (3) code a useful multilevel model using JAGS, and (4) review kernel density functions and the Bayesian classifier.    
+
+## Tiny R-tips {-}  
+- Suppose you want the x-label on your plot to be $\lambda \textrm{ (km)}$. In your call to `plot()` or `title()` use  
+`xlab = expression(lambda~~"(km)")` or `xlab = expression(lambda*" (km)")`.  
+
+- Suppose you want the y-label $\textrm{density (units of }\lambda^{-1})$. In your call to `plot()` or `title()` put  
+`ylab=expression("density (units of "*lambda^{-1}*")")`.   
+
+- Reminder: The naming system for R's statistical distributions is **dpqr**. Using the beta distribution as an example, the beta PDF is `dbeta()`, the beta CDF is `pbeta()`, the quantile function (inverse CDF function) is `qbeta()`, and the beta random number generator is `rbeta()`.  
+
+- By convention, every figure should have a caption, and every set of axes with more than one line or symbol on it should have a legend.  
+
+- The pipe operator `%>%` is part of the `magrittr` package and the `dplyr` package. You can read about it [here](https://www.datacamp.com/community/tutorials/pipe-r-tutorial). Please feel free to use it in your assignments. I don't use it as often as I should.  
+
+- The directed acyclic graph (DAG) is an important part of any BDA, and I would like to be able to make one _inside_ the Rmd. The online [dagitty](http://www.dagitty.net) is fun to use, but the results don't look quite as nice as the DAGs in H&H, and the Rmd isn't self-contained. However, there is now (I just discovered this) an R-package called [dagitty](https://cran.r-project.org/web/packages/dagitty/dagitty.pdf). There are two other R-packages, that I know of, for making DAGs; one is [dagR](https://cran.r-project.org/web/packages/dagR/dagR.pdf) and the other is [ggdag](https://cran.r-project.org/web/packages/ggdag/vignettes/intro-to-ggdag.html), which is apparently an extension of dagitty. Hobbs (of H&H) tells me that the DAGs in H&H, which I like a lot, were made using [Omnigraffle](https://en.wikipedia.org/wiki/OmniGraffle), a [vector graphics editor](https://en.wikipedia.org/wiki/Comparison_of_vector_graphics_editors), which he likes because it "works seamlessly with [LaTeXit](https://www.chachatelier.fr/latexit/latexit-home.php?lang=en)".  
+
+# Beta-binomial   
+In A03 we saw that the gamma PDF is the natural conjugate prior for the Poisson likelihood. Here we show that the beta PDF is the natural conjugate prior for the binomial likelihood.^[H&H cover this material in Section 5.3, page 86, but you don't need to read it.]  
+
+As an example, suppose you are studying the [prevalence](https://en.wikipedia.org/wiki/Prevalence) of ciguatoxin in kahala (amberjack, _Seriola rivoliana_). You obtain N=23 fish from local fishermen and detect ciguatoxin in y=5 of them. You want to do a Bayesian analysis to get a posterior PDF for prevalence $\phi$. Here's how you do it:  
+
+- Given prevalence $\phi$, the probability that $y$ out of $n$ fish will test positive is given by the binomial distribution which has kernel $\phi^y(1-\phi)^{n-y}$.  
+
+- The natural conjugate prior for the binomial is the beta distribution, which has kernel $\phi^{\alpha-1}(1-\phi)^{\beta-1}$. The parameters $\alpha$ and $\beta$ are called the first and second shape parameters.   
+
+- Applying Bayes rule, you multiply the two kernels to get the kernel of the posterior: $\phi^{\alpha+y-1}(1-\phi)^{\beta+n-y-1}$. The posterior is therefore a beta with shape parameters $\alpha'=\alpha+y$ and $\beta'=\beta+n-y$.  
+
+- What is the uninformative prior for the binomial likelihood? The mean of the beta distribution is $\mu=\alpha/(\alpha+\beta)$, hence the mean of the posterior is  
+
+$$
+E(\phi|\alpha',\beta') 
+= \frac{\alpha'}{\alpha'+\beta'}
+= \frac{\alpha+y}{\alpha+y+\beta+n-y}
+= \frac{\alpha+y}{\alpha+\beta+n}
+$$    
+
+- Intuitively, in the absence of any prior information the posterior mean should be $y/n$, from which it follows that the uninformative prior is the (improper) beta with $\alpha=\beta=0$.^[We will come to this same conclusion later by an entirely different line of reasoning, but for now let's simply trust our intuition about what seems reasonable.] This prior $\phi^{-1}(1-\phi)^{-1}$ is called the [Haldane prior](https://en.wikipedia.org/wiki/Beta_distribution#Haldane's_prior_probability_(Beta(0,0))), after the brilliant and colorful early 20th century mathematical biologist [J. B. S. Haldane](https://en.wikipedia.org/wiki/J._B._S._Haldane).      
+
+# Exercise 1. (10 pts) {-}  
+Plot the posterior PDF for prevalence for the ciguatera data (n=23, y=5); use the Haldane prior. On your graph, use vertical lines to indicate the median and an equal-tailed 95% credible interval. Annotate your plot with the three numerical values. Hint: the `legend()` function is handy for putting text on plots---notice how I used it in Figure 2 of A03.    
+
+## Solution to Ex 1. {-}  
+```{r, Ex1Sol, fig.cap="Posterior PDF for ciguuata prevelence in skip jack caught on Oahu. Halden prior used to calculate a' = a + n and b' = b + n - y with a = b = 0. The 0.025, 0.5, and 0.975 equal tailed intervals are 0.41, 0.56, and 0.71 respectivly"}
+
+n <- 23
+y <- 5
+alpha <- 0 #I think this is an alpha for the Halden prior
+beta  <- 0 #I think this is the Halden prior
+alpha_p <- alpha+n
+beta_p  <- beta+n-y
+quant <- c(0.025, 0.5, 0.975)
+xrange <- seq(0,1,0.01)
+
+METCI <- qbeta(quant, shape1 = alpha_p, shape2 = beta_p)
+gpdf <-  dbeta(xrange, shape1 = alpha_p, shape2 = beta_p)
+
+plot(xrange, gpdf, 
+     xlab="Ciguatera's", 
+     type="l",
+     col="skyblue", 
+     lwd=3,
+     yaxs="i",
+     ylab="density", 
+     panel.first=grid(),
+     main="Posterior Ciguatera Prevalence: Equal Tailed", 
+     ylim=c(0,6))
+abline(v = METCI, col=c("red", "grey", "coral"), lwd=2, lty=2)
+legend("topright", lty=c(1,2,2,2), lwd=c(2,2,2, 2),
+       col=c("skyblue","red","grey","coral"), bty="n",
+       legend=c("PDF",as.character(round(METCI, 2))))
+```
+
+**Answer Ex1:** Above I plotted the posterior distribution for ciguatera prevalence given a Haldane Prior with $a=b=0$. The median and 95% confidence interval is `r METCI` (2.5%, 50%, 95% confidence intervals). 
+
+# Highest density intervals (HDI)    
+Sophisticated readers of your report (Exercise 3, below) on the prevalence of ciguatoxin in _S. rivoliana_ will want to know the 95% _highest posterior density interval_ (95% HPDI), which usually differs from an equal-tailed 95% interval; see H&H Figure 8.2.1 p193 and the excellent discussion in its caption. This next chunk creates a function that calculates the HPDI for any given quantile function (inverse cumulative density function):  
+
+```{r HDIofICDF}
+HDIofICDF <- function( ICDFname , credMass=0.95 , tol=1e-8 , ... ) {
+  # Arguments:
+  #   ICDFname is the name of a quantile function such as qbeta.
+  #   credMass is the desired mass of the HDI region.
+  #   tol is passed to R's optimize function.
+  # Return value:
+  #   Highest density interval (HDI) limits in a vector.
+  # Example of use: For determining HDI of a beta(30,12) distribution, type
+  #   HDIofICDF( qbeta , shape1 = 30 , shape2 = 12 )
+  #   Notice that the parameters of the ICDFname must be explicitly named;
+  #   e.g., HDIofICDF( qbeta , 30 , 12 ) does not work.
+  # Credit: John K. Kruschke, Greg Snow.
+  incredMass <- 1.0 - credMass
+  intervalWidth <- function( lowTailPr , ICDFname , credMass , ... ) {
+    ICDFname( credMass + lowTailPr , ... ) - ICDFname( lowTailPr , ... )
+  }
+  optInfo <- # list(minimum = <argmin>, objective = <minimum>)
+    optimize( intervalWidth , # lowTailPr that minimizes intervalWidth
+              c( 0 , incredMass ) , 
+              ICDFname=ICDFname ,
+              credMass=credMass , tol=tol , ... )
+  HDIlowTailPr <- optInfo$minimum
+  return( c( ICDFname( HDIlowTailPr , ... ) ,
+             ICDFname( credMass + HDIlowTailPr , ... ) ) )
+} 
+
+```  
+
+This next chunk gives a function that estimates a HDI from samples.  
+
+```{r HDMIofMCMC}
+HDIofMCMC <- function( sampleVec , credMass=0.95 ) {
+  # Computes highest density interval from a sample of representative values.
+  # Arguments:
+  #   sampleVec
+  #     is a vector of representative values from a probability distribution.
+  #   credMass
+  #     is a scalar between 0 and 1, indicating the mass within the credible
+  #     interval that is to be estimated.
+  # Value:
+  #   HDIlim is a vector containing the limits of the HDI
+  # Credit: John K. Kruschke, "Doing Bayesian Data Analysis, 2nd edition"
+  sortedPts <- sort( sampleVec )
+  ciIdxInc <- # How many sample elements are in the CI?
+    ceiling( credMass * length( sortedPts ) )
+  nCIs <-     # number of possible CIs
+    length( sortedPts ) - ciIdxInc
+  ciWidth <- rep( 0 , nCIs ) # create storage
+  for ( i in 1:nCIs ) {
+    ciWidth[ i ] <- # last value in CI - first value in CI
+      sortedPts[ i + ciIdxInc ] - sortedPts[ i ]
+  } # end for
+  HDImin <- sortedPts[ which.min( ciWidth ) ]
+  HDImax <- sortedPts[ which.min( ciWidth ) + ciIdxInc ]
+  HDIlim <- c( HDImin , HDImax )
+  return( HDIlim )
+} 
+```  
+
+# Exercise 2 (10 pts) {-}  
+Repeat the plot that you did in Ex 1, but this time indicate the median and the 95% HPDI instead of the 95% equal-tailed interval. Use vertical lines and annotate the plot as you did in Ex 1. Hint: Use `HDIofICDF()` given above.     
+
+## Solution to Ex 2 {-}  
+
+```{r, Ex2Sol, fig.cap="Posterior PDF for ciguuata prevelence in skip jack caught on Oahu. Halden prior used to calculate a' = a + n and b' = b + n - y with a = b = 0. The 95% HDI interval is 0.41, 0.56, and 0.71 respectivly"}
+
+HDI <- HDIofICDF(qbeta , shape1 = alpha_p, shape2 = beta_p, credMass = 0.95) 
+#HDImedian <- median(xrange)
+
+plot(xrange, gpdf, 
+     xlab="Ciguatera's", 
+     type="l",
+     col="skyblue", 
+     lwd=3,
+     yaxs="i",
+     ylab="density", 
+     panel.first=grid(),
+     main="Posterior Ciguatera Prevalence: 95% HDI", 
+     ylim=c(0,6))
+abline(v = HDI, col=c("red", "coral"), lwd=2, lty=2)
+legend("topright", lty=c(1,2,2), lwd=c(2,2,2),
+       col=c("skyblue","red", "coral"), bty="n",
+       legend=c("PDF",as.character(round(HDI, 2))))
+```
+
+**Answer Ex1:** Above I plotted the posterior distribution for ciguatera prevalence given a Haldane Prior with $a=b=0$. The median and 95% confidence interval is `r METCI` (2.5%, 50%, 95% confidence intervals). There does not seem to be much of a difference between the 95% HPDI and the 95% equal-tailed interval possibly because the posterior pdf's skew is small. I had difficulty getting the median correctly calculated/displayed using the HDIofICDF function for this data set. 
+
+# A multilevel model   
+
+The numbers in the following are entirely invented, but don't go eating _S. rivoliana_ without testing it first. Consider the data in the following table, and that our goal is to obtain, for each island, a posterior PDF for the prevalence of [ciguatoxin](https://en.wikipedia.org/wiki/Ciguatoxin).    
+
+```{r ciguatera}
+df <- data.frame(
+  Island=c("Hawaii","Maui","Lānai","Kaho'olawe","O'ahu","Kauai","Ni'ihau"),
+  n     =c(  112   ,  65  ,    3  ,      5     ,   20  ,   21  ,    2    ),
+  y     =c(   53   ,  32  ,    1  ,      4     ,   10  ,   17  ,    1    ))
+Tcap <- "Simulated ciguatoxin prevalence data for _S. rivoliana_."
+df
+#%>% kbl(caption=Tcap) %>% kable_paper("hover")
+```  
+
+<p>&nbsp;</p>
+
+In the following we will use the fact that it is often convenient to parameterize the beta distribution by its mode^[Recall that the mode of a PDF is the point at which it takes its maximum value.] $\omega$, and concentration $\kappa$, given respectively by:  
+
+$$
+\omega=\frac{\alpha-1}{\alpha+\beta-2};\ \ \ \ \kappa=\alpha+\beta
+$$  
+
+Notice that the formula for the mode is well behaved when $|\kappa|\ne 2$, but it is only a mode (i.e., a maximum) if $\alpha \gt 1$ and $\kappa \gt 2$.  For use below, here are the shape parameters in terms of the mode and concentration.  
+
+$$
+\alpha = 1 + \omega\cdot(\kappa-2);\ \ \ \ \beta = \kappa - \alpha
+$$
+
+- We would like to generate a separate PDF for prevalence on each island, allowing the PDFs to _borrow strength_ by sharing information. "Borrowing strength" and "[shrinkage](https://en.wikipedia.org/wiki/Shrinkage_(statistics))" are terms of art in BDA.   
+
+- Our game plan is to assume that the PDF for each island has a mode $\omega$, and that each mode is a draw from the same _parent distribution._ As each mode lies between 0 and 1, we will use a beta for the parent distribution of modes.  
+
+- Similarly we will assume that the concentration for each island is a draw from the same parent distribution. As concentration can vary from 2 to $\infty$, we will use the variable $\kappa_m=\kappa-2$, and draw all the $\kappa_m$ from the same gamma parent distribution.    
+
+- What about the parameters of the two parent distributions? Those parameters are stochastic and require priors. We would like to make those priors as uninformative as possible, recognizing that in MCMC work priors that are _too_ uninformative occasionally cause chains to crash or take a long time to converge.    
+
+The following chunk gives a BUGS model. The data vectors are `n[]`, and `y[]` with one element for each island. The stochastic variables are:  
+
+- `mode[]` and `km[]`, the mode and concentration parameters for each island;  
+
+- `mode_0` and `km_0`, the parameters of the parent beta distribution for each element of `mode[]`;  
+
+- `shape0` and `rate0`, the parameters of the parent gamma distribution for each element of `km[]`.   
+
+All of the stochastic variables will need initial values, one set of initial values for each MCMC chain.  
+
+```{r BUG}
+bug1 <- "model {
+
+/* observations */
+for (i in 1:length(n)) {
+  y[i] ~ dbin(p[i], n[i])
+}
+
+/* prevalence for each island */
+for (i in 1:length(n)) {
+  p[i] ~ dbeta(shape1[i], shape2[i])
+}
+
+/* mode and concentration for each island */
+for (i in 1:length(n)) {
+  mode[i] ~ dbeta(shape1_0, shape2_0)
+  km[i] ~ dgamma(shape_0, rate_0)
+  shape1[i] <- 1 + mode[i]*km[i] 
+  shape2[i] <- km[i] + 2 - shape1[i]
+}
+
+/* parameters of parent distribution for mode[] */
+mode_0 ~ dbeta(0.1, 0.1)
+km_0 ~ dgamma(0.1, 0.1)
+shape1_0 <- 1 + mode_0*km_0
+shape2_0 <- km_0 + 2 - shape1_0
+
+/* parameters of parent distribution for km[] */
+shape_0 ~ dgamma(0.1, 0.1)
+rate_0  ~ dgamma(0.1, 0.1)
+}"
+```  
+# Exercise 3 (50 pts) {-}  
+Create **(a)** a list of initial values and **(b)** a list of data, then **(c)** run the BUGS model using `run.jags()`. **(d)** Make a figure showing density histograms of prevalence for each island. Use `HDIofMCMC()` to get a 95% HDPI for each prevalence. Show the median and the limits of the 95% HPDI on each subplot. Show the local data ratio $y/n$. **(e)** What would the posterior for Lānai look like if you used the data from nearby Maui to make a prior?      
+
+## **3(a)** Initial values list {-}  
+In the following chunk I create a list of initial values for each stochastic variable. This is a list of lists, one sublist for each MCMC chain. The initial value of each stochastic variable must be consistent with its distribution in the BUGS model, so one strategy is to use these same distributions to generate initial values. (It doesn't matter too much what the initial values are as long as they are different for each chain, and the chains don't crash.) If you get a message from JAGS saying one or more simulations have crashed, try changing the random number seed in the following chunk and try again. You may have to try several times.  
+
+(Put your chunk for the initial values list here. Give the list the name `inits1`.)  
+
+```{r Ex3aSol}
+#this needs a stochastic varable draw for each island
+islands <- nrow(df)
+
+RNGs <- c("base::Super-Duper", 
+          "base::Wichmann-Hill", 
+          "base::Marsaglia-Multicarry", 
+          "base::Mersenne-Twister")
+RNGs <- rep(RNGs, 3) # allows up to 12 chains
+
+set.seed(5)
+nChains <- 3 # detectCores() - 1 is best, but we use 3
+inits <- vector(mode="list", length=nChains) # pre-allocate
+for (ic in 1:nChains) {
+  
+  mode_0 <- rbeta(1, shape1=0.1, shape2=0.1) #parameters beta distribution 
+  km_0 <- rbeta(1, shape1=0.1, shape2=0.1) #parameters beta distribution 
+  shape1_0 <- 1 + mode_0*km_0
+  shape2_0 <- km_0 + 2 - shape1_0
+  mode <- rbeta(islands, shape1=shape1_0, shape2=shape2_0) 
+  
+  shape_0 <- rgamma(1, shape=0.1, rate=0.1) #parameters parent gamma 
+  rate_0 <- rgamma(1, shape=0.1, rate=0.1) #parameters parent gamma distribution 
+  #km <- rgamma(islands, shape = shape_0, rate = rate_0) 
+  
+  #lambda <- runif(1, min = 0.8*sum(n)/N, max = 1.2*sum(n)/N)
+  
+  inits[[ic]] <- list(mode     = mode, #mode for each island
+                      #km       = km, #concentration for each island
+                      mode_0   = mode_0, #parameters of the parent beta
+                      km_0     = km_0, #parameters of the parent beta  
+                      shape_0  = shape_0, #parameters of the parent gamma
+                      rate_0   = rate_0)
+  } #parameters of the parent gamma distribution for each element of `km[]`
+                      #RNG.name = RNGs[ic],
+                     #.RNG.seed = ic + 1) #put all stochastic variables here
+                     
+########################## added by NF ################################
+inits2 <- vector(mode="list", length=nChains) # pre-allocate
+for (ic in 1:nChains) {
+  p <- runif(nrow(df), 0.9*df$y/df$n, 1.1*df$y/df$n)
+  inits2[[ic]] <- list( p        = p       ,
+                       .RNG.name = RNGs[ic],
+                       .RNG.seed = ic +1   )
+}
+```
+
+## **3(b)** Data list {-}  
+In the following chunk I create a data list for `run.jags()`.  
+
+(Put your chunk for the data list here. Give it the name `data1`.)  
+
+```{r Ex3bSol,}
+y <- df$y
+n <- df$n
+data_1 <- list(n = n,         
+               y = y 
+              )
+```  
+
+## **3(c)** run.jags() {-}  
+In the following chunk I run `run.jags()` and extract the samples of prevalence.  
+```{r, Ex3cSol}
+#this runs too long need it to run shorter
+
+# library(runjags) loaded in setup chunk
+set.seed(987)
+burnin <- 1000
+rjo <- # S3 object of class "runjags"
+  run.jags(model = bug1,
+           silent.jags = TRUE,
+           data = data_1,
+           n.chains = 3,
+           adapt = 500,
+           burnin = burnin,
+           sample = 3000, #change this, something is making this take too long?
+           method = "parallel",
+           inits = inits2, #inits, <---------------------------------- NB
+           modules = "glm",
+           monitor = c("p") # keep samples for these variables
+          )
+
+# If this crashes, type failed.jags() in the console for suggestions.  
+cleanup.jags() # cleanup any failed runs  
+# plot(rjo)    # summary plots
+```
+
+## **3(d)** Prevalence for each island {-}  
+In the following chunk I create a figure showing the posterior density of prevalence for each island. Each panel also shows the median, the 95% HPDI and the value $y/n$. See the caption and legend for details.    
+
+```{r posteriors, fig.asp=0.5, fig.cap="Posterior PDFs from a multilevel model for prevalence of ciguatoxin in kahala (amberjack, _S. rivoliana_) near the main Hawaiian islands. For each island, the 95% HPDI is indicated by vertical red lines, and the median by a red dashed line. The skyblue line shows the posterior PDF using only the y,n data from that island together with the Haldane prior. It can be seen that the posteriors for the low-data islands of Lānai, Kaho'olawe and Ni'ihau have _borrowed strength_ from the data from other islands, but they are still very broad because of the paucity of local data."}
+imed <- rjo$summaries[,2]
+sams <- as.matrix(rjo$mcmc) # extract samples 
+mypar(mfrow=c(2, 4), tcl=-0.3, xaxs="i", yaxs="i", cex.main=0.9, font.main=1)
+pnams <- paste0("p[",1:7,"]") # names of the columns in the matrix sams
+NI <- 7
+HDI <- data.frame(rep(0,7),rep(0,7))
+
+for (i in 1:NI) { # loop over islands
+  
+  HDI[i,] <- HDIofMCMC(sams[,i], credMass=0.95)
+  den <- density(sams[ ,pnams[i]]) # density histogram for island i
+  x <- seq(0,1,0.01) # x's for the...
+  y <- dbeta(x, df$y[i], df$n[i]-df$y[i]) # ...posterior using only local data
+  
+  ylim <- c(0, max(y, den$y))
+  plot(x, y, type="l", lwd=2, col="skyblue", xlim=c(0,1), ylim=ylim, 
+       panel.first=grid(), main="", xlab="Prevalence", ylab="Density")
+  title(main=df$Island[i], cex=0.9) 
+  lines(den) # posterior from multilevel model
+  abline(v = c(HDI[i,], imed[i]), col=c("red", "red", "red"), lwd=c(1,1,1), lty=c(1,1,2))
+  #abline(v = imed[i], col=c("red", "coral"), lwd=2, lty=2)
+}
+
+``` 
+```{r, Ex3dSol}
+imed <- as.numeric(imed)
+legends <- data.frame(df$Island, HDI, imed)
+colnames(legends) <- c("Islands", "Lower 95%", "Upper 95%", "Median")
+legends <- as.data.table(legends)
+
+knitr::kable(legends, format="html")
+```
+**AnswerEx3d:** I spend way to long attempting to display the above table in the last plot box of the Hawaiian Island pdf figure. So I've displayed it as a stand alone summary table instead. 
+
+## **3(e)** Maui as a prior for Lānai? {-}  
+The question was What would the posterior for Lānai look like if you used the data from nearby Maui to make a prior? Hints: Don't over-think this---the calculation is so simple you could do it in your head. Use the data from Maui and a Haldane prior to get a posterior for Maui, then use the posterior for Maui as a prior for Lānai. On the same axes, graph the Lānai posterior from the Haldane prior and the Lānai posterior from the Maui prior. Briefly discuss the difference from the multilevel posterior for Lānai.   
+
+```{r, Ex3eSol, fig.cap="Posterior using Maui as a Prior (with a Haldane Prior for Mui). The skyblue line is the Maui Prior, the black line is the Lanai Posterior, and the tomato line is a Lanai posterior using a Haldane prior"}
+
+#For Maui
+n <- 65
+y <- 32
+alpha <- 0 #I think this is an alpha for the Halden prior
+beta  <- 0 #I think this is the Halden prior
+alpha_p <- alpha+n
+beta_p  <- beta+n-y
+
+quant <- c(0.025, 0.5, 0.975)
+xrange <- seq(0,1,0.01)
+
+Maui_METCI <- qbeta(quant, shape1 = alpha_p, shape2 = beta_p)
+Maui_gpdf <-  dbeta(xrange, shape1 = alpha_p, shape2 = beta_p)
+
+##For Lanai
+n <- 3
+y <- 1
+alpha_p <- alpha_p+n
+beta_p  <- beta_p+n-y
+#quant <- c(0.025, 0.5, 0.975)
+xrange <- seq(0,1,0.01)
+
+Lani_METCI <- qbeta(quant, shape1 = alpha_p, shape2 = beta_p)
+Lani_gpdf <-  dbeta(xrange, shape1 = alpha_p, shape2 = beta_p)
+
+##For Lanai
+alpha_p <- alpha+n
+beta_p  <- beta+n-y
+
+Lani_METCI <- qbeta(quant, shape1 = alpha_p, shape2 = beta_p)
+Lani_Halden <-  dbeta(xrange, shape1 = alpha_p, shape2 = beta_p)
+
+plot(xrange, Maui_gpdf, 
+     xlab="Ciguatera's", 
+     type="l",
+     col="skyblue", 
+     lwd=3,
+     yaxs="i",
+     ylab="density", 
+     panel.first=grid(),
+     main="Lanai Posterior from Maui Prior", 
+     ylim=c(0,10))
+lines(xrange, Lani_gpdf, lwd=2, col="black")
+lines(xrange, Lani_Halden, lwd=2, col="tomato")
+legend("topright", lty=c(1,1,1), lwd=c(2,2,2),
+       col=c("skyblue","black","tomato"), bty="n",
+       legend=c("Maui Prior","Lanai Posterior","Lanai Haldane"))
+
+#abline(v = Lani_METCI, col=c("red", "grey", "coral"), lwd=2, lty=2)
+```
+**Answer:** I used a Haldane prior and to make a posterior beta distribution for Maui. I then used the Maui posterior as a prior for Lanai. I used the alpha prime from the Maui posterior as the alpha for the Lanai posterior. Using the larger Maui data set to inform the Lanai Posterior, pulls the the Lanai pdf to a similar shape as the Maui pdf. The tomato colored line is a Lanai posterior using a Haldane Prior. I shw this because I was unable to generate a multilevel posterior for Lanai, so instead tried a posterior from a Haldane prior. 
+
+# Review: the Bayesian classifier   
+In the following chunk we simulate some data for training and validation. (The distinction is one of usage not origin---we could equally well use the validation set for training and the training set for validation.) You do not need to follow the code. All you need to know is (1) that after the chunk has run the training data for group 1 will be in a two-column matrix named `xyt1` and similarly for groups 2 and 3; and (2) for your convenience the validation data will be in a data frame called `dfv` with columns named `x`, `y`, `tcat` and `ecat`. The column named `tcat` will have the true category of the data point (x,y), and the column named `ecat` is where to put the estimated category.
+
+```{r BC, fig.asp=0.5, fig.cap="Training data and validation data for a Bayesian classifier."}
+## simulate training data 
+set.seed(132)
+Pri <- c(3, 2, 1)/6 # unknown true priors
+trans <- function(xy, cent=c(5,4), deg=45) { # need below
+  ## rotate (x,y) by deg about cent
+  rad <- pi*deg/180
+  cr <- cos(rad); sr <- sin(rad)
+  mat <- matrix(c(cr, -sr, sr, cr), ncol=2)
+  nr <- nrow(xy)
+  ct <- cbind(rep(cent[1], nr), rep(cent[2], nr) )
+  (xy - ct) %*% mat + ct
+}
+
+## How many samples to make for each group?
+Nt  <- Nv <- integer(3) # numbers of samples 
+isam <- sample(x=c(1,2,3), size=100, replace=TRUE, prob=Pri)
+for (i in 1:3) Nt[i] <- sum(isam==i) # number of training samples
+isam <- sample(x=c(1,2,3), size=100, replace=TRUE, prob=Pri)
+for (i in 1:3) Nv[i] <- sum(isam==i) # number of validation samples
+
+## simulate Nt[1], Nv[1] points of training from group 1
+xyt1 <- trans(mvrnorm(Nt[1], mu=c(5,4), Sigma=0.15*Diagonal(2)))
+xyv1 <- trans(mvrnorm(Nv[1], mu=c(5,4), Sigma=0.15*Diagonal(2)))
+
+## simulate Nt[2], Nv[2] points from group 2
+u2 <- seq(3, 7, len=Nt[2])
+v2 <- 2 + (u2 - 5)^2
+mvr <- function(mn) mvrnorm(1, mu=mn, Sigma=0.07*Diagonal(2))
+xyt2 <- trans(t(apply(cbind(u2,v2), FUN=mvr, MARGIN=1)))
+u2 <- seq(3, 7, len=Nv[2])
+v2 <- 2 + (u2 - 5)^2
+xyv2 <- trans(t(apply(cbind(u2,v2), FUN=mvr, MARGIN=1)))
+
+## simulate Nt[3], Nv[3] points from group 3
+u3 <- seq(4, 6, len=Nt[3])
+v3 <- 6 - (u3 - 5)^2
+xyt3 <- trans(t(apply(cbind(u3,v3), FUN=mvr, MARGIN=1)))
+u3 <- seq(4, 6, len=Nv[3])
+v3 <- 6 - (u3 - 5)^2
+xyv3 <- trans(t(apply(cbind(u3,v3), FUN=mvr, MARGIN=1)))
+
+## plots
+mypar(mfrow=c(1,2), cex.main=0.9, font.main=1) # graphics pars.   
+cols <- c(gray(0.5), "red", "blue")
+pchs <- c(16, 17, 18) # point types
+ptex <- c(1, 1, 1.3)  # point sizes
+legs <- paste("Group", 1:3) # for legend()
+
+## left panel for training data
+plot(0, 0, xlim=c(1,8), ylim=c(1,8), type="n", # make axes
+     xlab="feature x", ylab="feature y", main="",
+     panel.first=grid())
+title(main="Training data", cex=0.7)
+points(xyt1, col=cols[1], pch=pchs[1], cex=ptex[1])
+points(xyt2, col=cols[2], pch=pchs[2], cex=ptex[2])
+points(xyt3, col=cols[3], pch=pchs[3], cex=ptex[3])
+legend("top", pch=pchs, col=cols, horiz=TRUE, 
+       pt.cex=ptex, legend=legs, cex=0.5, inset=c(0.0, 0.02))
+
+## right panel for validation data
+plot(0, 0, xlim=c(1,8), ylim=c(1,8), type="n", # make axes
+     xlab="feature x", ylab="feature y", main="", 
+     panel.first=grid())
+title(main="Validation data", cex=0.7)
+points(xyv1, col=cols[1], pch=pchs[1], cex=ptex[1])
+points(xyv2, col=cols[2], pch=pchs[2], cex=ptex[2])
+points(xyv3, col=cols[3], pch=pchs[3], cex=ptex[3])
+legend("top", pch=pchs, col=cols, horiz=TRUE, 
+       pt.cex=ptex, legend=legs, cex=0.5, inset=c(0.0, 0.02))
+
+## put validation data into a data frame
+dfv <- rbind(xyv1, xyv2, xyv3)
+colnames(dfv) <- c("x", "y")
+dfv <- as.data.frame(dfv)
+dfv$tcat <- c(rep(1, Nv[1]), rep(2, Nv[2]), rep(3, Nv[3]))
+dfv$ecat <- rep(NA_integer_, sum(Nv))
+dfv <- dfv[sample.int(nrow(dfv)), ]
+
+## training data names
+colnames(xyt1) <- c("x","y")
+colnames(xyt2) <- c("x","y")
+colnames(xyt3) <- c("x","y")
+``` 
+
+# Exercise 4 (30 pts) {-}  
+Recall the Bayesian classifier algorithm from A02. For a given data point $x,y$ the Bayesian classifier picks the category for which the posterior probability is largest:
+
+$$\begin{align}
+(\#eq:BC)\\
+\hat{i}(x,y) &= \underset{i}{\text{argmax}}\,\Pr(i|x,y) 
+&\text{the BC algorithm}\\
+&=\underset{i}{\text{argmax  }}  p(x,y|i)\Pr(i) 
+&\text{Bayes rule}\\
+\end{align}$$  
+
+Recall that the naive Bayesian classifier is just a Bayesian classifier that makes the independence approximation $p(x,y|i)=p(x|i)\,p(y|i)$.  
+
+## Part (a) {-}  
+Use the training data to write a Bayesian classifier. Test it on the validation data and give the success rate. Hints: Your prior $\Pr(i)$ should be the number of training data points in group _i_ divided by the total number of training data points. For each $p(x,y|i)$ use a mixture PDF in which each component is a symmetric bivariate Normal whose mean is a point in the training data. By "symmetric" I mean that the covariance matrix is diagonal with equal entries.^[Such a Normal conveniently factors into univariate normals with the same SD.]  The weight of each component PDF should be _1/N_ where _N_ is the number of components (the number of training data points). Experiment a bit to get a good value for the SD. A mixture distribution of this type is called a _kernel density_. 
+
+## Solution to (a) {-}  
+```{r, EX4asol}
+#Creating training data frame
+xyt1 <- cbind(xyt1, rep(1, nrow(xyt1)))
+xyt2 <- cbind(xyt2, rep(2, nrow(xyt2)))
+xyt3 <- cbind(xyt3, rep(3, nrow(xyt3)))
+dft <- rbind(xyt1, xyt2, xyt3) #training data set
+dft <- data.frame(dft)
+colnames(dft) <- c("x", "y", "ID")
+
+#length of each training data set
+N1  <- nrow(xyt1)
+N2  <- nrow(xyt2)
+N3  <- nrow(xyt3)
+NT  <- (N1 + N2 + N3) #total length all training groups
+NV <- nrow(dfv) #total length of validation data
+
+## estimate priors
+Pr1_t <- N1/NT
+Pr2_t <- N2/NT
+Pr3_t <- N3/NT
+
+#Creating a generic function to be used to classify
+pxy_t <- function(df_ver, df_train, sdv) {
+  NT  <- nrow(df_train) #weight of the mixture component
+  mux <- df_train[,1] #mean centered 
+  muy <- df_train[,2]
+  x <- df_ver[,1]
+  y <- df_ver[,2]
+  sum(dnorm(x,  mean=mux, sd=sdv)*
+        dnorm(y, mean=muy, sd=sdv))/NT #univariate normals with the same SD
+} 
+
+sdv = seq(0.1, 1, by=0.1)
+success_rate <- rep(0,length(sdv))
+
+for (j in 1:length(sdv)){
+  for (i in 1:NV) {
+    dfv$ecat[i] <- which.max(c(
+      pxy_t(dfv[i,], dft[dft$ID==1,], sdv=sdv[j]) * Pr1_t, 
+      pxy_t(dfv[i,], dft[dft$ID==2,], sdv=sdv[j]) * Pr2_t, 
+      pxy_t(dfv[i,], dft[dft$ID==3,], sdv=sdv[j]) * Pr3_t
+    ))
+  }
+
+  #How many points correctly categorized?
+  right_v <- sum(dfv$ecat==dfv$tcat) #is equal
+  wrong_v <- sum(!dfv$ecat==dfv$tcat) #is not equal
+  success_rate[j] <- right_v/(right_v + wrong_v)
+}
+
+max_success_rate <- max(success_rate)
+best_sd <- sdv[success_rate==max_success_rate]
+```  
+
+**Answer a:** The success rate of my Baysian classifier was `r max_success_rate*100`% using a standard deviation of `r best_sd`. To find the maximum success rate, I looped through a sequence of standard deviations from 0.1 to 1 by 0.1. I borrowed heavily from the code provided in Assignmen 2. 
+
+## Part (b) {-}  
+Use the training data to write a _naive_ Bayesian classifier. Test it on the training data and give the success rate. Hints: For each $p(x|i)$ use a mixture PDF in which each component is a univariate Normal with mean equal to a point in the training data. Experiment a bit to get a good value for the SD. Compare the success rate with that of the Bayesian classifier, and briefly discuss.    
+
+## Solution to (b) {-}  
+```{r, Ex4bSol, cache=TRUE}
+px_t <- function(df_ver, df_train, sdv) {
+  NT  <- nrow(df_train) #weight of the mixture component
+  mux <- df_train[,1] #mean centered 
+  x <- df_ver[,1]
+  sum(dnorm(x,  mean=mux, sd=sdv))/NT
+} 
+
+py_t <- function(df_ver, df_train, sdv) {
+  NT  <- nrow(df_train) #weight of the mixture component
+  muy <- df_train[,2]
+  y <- df_ver[,2]
+  sum(dnorm(y, mean=muy, sd=sdv))/NT
+} 
+
+sdv = seq(0.1, 1, by=0.1)
+success_rate <- rep(0,length(sdv))
+
+for (j in 1:length(sdv)){
+  for (i in 1:NV) {
+    dfv$ecat[i] <- which.max(c(
+      py_t(dfv[i,], dft[dft$ID==1,], sdv=sdv[j]) * 
+        py_t(dfv[i,], dft[dft$ID==1,], sdv=sdv[j]) * Pr1_t, 
+      
+      py_t(dfv[i,], dft[dft$ID==2,], sdv=sdv[j]) * 
+        py_t(dfv[i,], dft[dft$ID==2,], sdv=sdv[j]) * Pr2_t, 
+      
+      py_t(dfv[i,], dft[dft$ID==3,], sdv=sdv[j]) * 
+        py_t(dfv[i,], dft[dft$ID==3,], sdv=sdv[j]) * Pr3_t
+    ))
+  }
+
+  #How many points correctly categorized?
+  right_v <- sum(dfv$ecat==dfv$tcat) #is equal
+  wrong_v <- sum(!dfv$ecat==dfv$tcat) #is not equal
+  success_rate[j] <- right_v/(right_v + wrong_v)
+}
+
+max_success_rate2 <- max(success_rate)
+best_sd2 <- sdv[success_rate==max_success_rate2]
+``` 
+
+**Answer b:** The success rate of my Naive Bayesian classifier is `r max_success_rate2*100`%, and was found using the standard deviations `r best_sd2`. To find the maximum success rate, I looped through a sequence of standard deviations from 0.1 to 1 by 0.1. In this case, both of the standard deviations `r best_sd2`,  produced the maximum success rate `r max_success_rate2`. The success rate for my naive Baysian classifier is`r max_success_rate-max_success_rate2*100`% worse than my Bayesian classifier, but this time (compared to last assignment) the naive classifier was not significantly easier to code than the Bayesian classifier. 
+
+## Part (c) {-}  
+Cross-validation is possibly the best method of model selection in most data analysis problems. Suppose you do not want to waste your training data by throwing half of it away to use for validation. Explain how you would use _leave-one-out-cross-validation_ (LooCV) to select the SD for your classifiers in (a) and (b).   
+
+## Solution to (c) {-}  
+
+Here we performed a cross validation using half of the data as a training set, and the other half of the data as a validation set to give an error estimate for how well our (Naive) Bayesian Classifier will perform on data it has not already seen. Leave one out cross validation is similar except it uses one data point as validation data and the rest as training data. LooCV loops through the entire data set and performs the validation as many times as there are data points (each point gets a turn being the validation data). Using LooCV drastically reduces the amount of data "lost" to validation, as only one point is sentenced to the validation data set at any given time. 
+
+## Part (d) {-}  
+This exercise used three categories and two features. If there were more categories and features would the code be significantly longer? Yes or No? Don't over think this.  
+
+## Solution to (d) {-}  
+
+**Answer:** No, by adding categories e.g. groups would not significantly increase the length of the code for the Bayesian classifier. For each additional category one line would be added in the classifying 'for loop'. The Naive classifier would need one new function for each feature. But even if the number of features and categories increased dramatically, and keeping the code length short was a priority, I'm sure the script could be modified to accommodate a lot of features and categories without being crazy long (more vectorization and defining functions).
+
+features = x and y
+categories = # of groups
+

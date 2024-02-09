@@ -1,0 +1,496 @@
+---
+title: "Ash_A08"
+author: "Jamsie Ash"
+date: "due: 2021-03-13"
+output: 
+  #html_document: 
+  bookdown::html_document2:  
+    self-contained: yes
+    theme: cerulean #paper #cosmo #journal #readable
+    toc: true
+    smooth_scroll: true
+    toc_depth: 3
+    toc_float: true
+    number_sections: true
+    fig_caption: yes
+    code_folding: hide
+    # bibliography: ["geothermal.bib", "r.bib"]
+    # csl: apa-5th-edition.csl
+    # link-citations: yes
+---  
+
+<style type="text/css">  
+/* Note: CSS uses C-style commenting. */
+h1.title{font-size:22px; text-align:center;}
+h4.author{font-size:16px; text-align:center;}
+h4.date{font-size:16px; text-align:center;}
+body{ /* Normal  */ font-size: 13px}
+td {  /* Table   */ font-size: 12px}
+h1 { /* Header 1 */ font-size: 16px}
+h2 { /* Header 2 */ font-size: 14px}
+h3 { /* Header 3 */ font-size: 12px}
+.math{ font-size: 10pt;}
+.hi{ /* hanging indents */ 
+    padding-left:22px; 
+    text-indent:-22px;
+}
+blockquote {  
+    padding: 10px 20px;
+    margin: 0 0 20px;
+    font-size: 12px;
+    border-left: 5px solid #eee;
+}
+code.r{ /* code */ 
+       font-size: 12px;
+}
+pre{/*preformatted text*/ 
+    font-size: 12px;
+}
+p.caption {/* figure captions */ 
+    font-size: 1.0em;
+    font-style: italic; 
+} 
+</style>
+
+```{r setup, echo=FALSE, warning = FALSE}
+rm(list=ls()) # clean up
+
+## load packages quietly
+shhh <- suppressPackageStartupMessages # It's a library, so shhh!
+want <- c("knitr", "runjags", "coda", "MASS", "Matrix", "kableExtra",
+          "zeallot", "magrittr", "scdensity", "fMultivar", "scales")
+for (pkg in want) shhh(library(pkg, character.only=TRUE))
+
+## set some chunk options
+gr <- (1+sqrt(5))/2 # golden ratio, for figures
+opts_chunk$set(comment="  ",
+               #echo=FALSE,
+               cache=c(TRUE, FALSE)[1], 
+               eval.after="fig.cap",
+               collapse=TRUE, 
+               dev="png",
+               fig.width=7.0,
+               out.width="95%",
+               fig.asp=0.9/gr,
+               fig.align="center"
+               )
+
+## Kruschke's utility functions (edited by NF for use in RMarkdown)
+if (c(TRUE,FALSE)[2]) source("DBDA2E-utilities.R") 
+
+## handy function to color text
+colorize <- function(x, color) {
+  ## x is a string
+  ## example:`r colorize("The assignment", "red")`
+  if (knitr::is_latex_output()) {
+    sprintf("\\textcolor{%s}{%s}", color, x)
+  } else if (knitr::is_html_output()) {
+    sprintf("<span style='color: %s;'>%s</span>", color, x)
+  } else x
+}
+
+mypar <- # Convenience wrapper for par()
+## Values are from Bloomfield (2014) "Using R for Numerical Analysis
+## in Science and Engineering." See ?par for meanings.
+function(mgp=c(2,0.5,0), mar=c(4,4,1.5,1.5), bty="l", 
+         bg=gray(0.97), tcl=0.3, mex=0.8, cex.main=0.9,
+         font.main=1,...) 
+  par(mgp=mgp, mar=mar, bty=bty, bg=bg, tcl=tcl, mex=mex,
+      cex.main=cex.main, font.main=font.main,...) 
+
+comma <- # dynamic numbers in narrative
+  function(x) format(x, digits = 2, big.mark = ",")
+# comma(3452345) # "3,452,345"
+# comma(.12358124331) # "0.12"
+
+## fresh start? (This should not be necessary.)
+rmCache <- c(TRUE, FALSE)[1] 
+if (rmCache)
+  if (file.exists("Frazer_A08_cache")) 
+    unlink("Frazer_A08_cache", recursive=TRUE)
+```  
+
+\newcommand{\logit}{\mathrm{logit}}
+\newcommand{\expit}{\mathrm{expit}}
+\newcommand{\E}{\mathrm{E}}
+\newcommand{\Var}{\mathrm{Var}}
+\newcommand{\Corr}{\mathrm{Corr}}
+
+# Goals {-}   
+The goal of this assignment is to write our own Gibbs sampler (GS), using inverse transform sampling as the building block. Our GS is slower than JAGS, and we will need to debug it, so we apply it to a 2D density.  
+
+# Ex 1.  Variable types {-}  
+(10 pts) Classify each of following quantities as ratio scale (RS), interval scale discrete (IS), or proportion/probability (PP):  
+
+1. Distance in km from a fixed point. - RS  
+2. Location coordinates on a map. - IS  
+3. A clock time, such as 12:30 pm - IS  
+4. The length of day in hours. - RS 
+5. The chance of rain tomorrow. - PP 
+6. The odds that it will rain tomorrow. - PP 
+7. The logarithm of the odds it will rain tomorrow. - RS  
+8. The area of a plot of land in km^2^. - RS  
+9. The logarithm of the area of a plot of land. - RS  
+10. Date in years, such as 2011. - IS
+11. The time in years since the last major earthquake. - IS (more than one earthquake)
+
+**Answer:** I put the abbreviation to ratio scale (RS), interval scale (IS), or proportion/probability (PP) on the left side of the question. 
+
+# Inverse transform sampling {-}  
+In order to understand how JAGS works, we will write our own Gibbs sampler (GS). It won't be nearly as sophisticated as JAGS, but that's OK; in the world of MCMC a code that works longer and harder will get you the same result as a code that works smarter.  
+
+To build a GS we need a function that samples from an arbitrary PDF, i.e., any positive function with a finite integral. JAGS uses slice sampling for that because it's fast, but we will use something called _inverse transform sampling_ (ITS) which sounds complicated but is really quite simple. ITS is slower than slice sampling, but it never gets stuck. How to build an ITS sampler? As usual, conservation of probability rides to our rescue. Suppose you know the CDF $F_X(x|\theta)$ of a random variable $X$ and you want a sample. (Later we'll see how to build a CDF from any positive function, a procedure that is also quite simple.) To ease the LaTeX burden I won't bother to indicate the conditioning on $\theta$, but don't forget that it's there. Define the random variable $U$ by $u=F_X(x)=\int_{-\infty}^x p_X(x')dx'$. The CDF increases monotonically from 0 to 1, so $0\le U\le 1$. Using conservation of probability we calculate the PDF of $U$:  
+
+$$\begin{align}
+p_U(u) |du|
+&= p_X(x)|dx| \\
+p_U(u) &= \frac{p_X(x)}{|dU/dx|} \\
+&= \frac{p_X(x)}{|dF_X(x)/dx|} \\
+&=\frac{p_X(x)}{|p_X(x)|} \\
+&=1.
+\end{align}$$  
+
+In other words, $U$ has the uniform distribution on the interval $[0,1]$. To get a sample $x$ from $p_X(x)$, we draw a sample $u$ from the uniform distribution on $[0,1]$, and our desired sample of $x$ is then $F_X^{-1}(u)$. The function $F_X^{-1}$ is just the familiar quantile function.  
+
+A diagram will help make the foregoing more plausible. As a preliminary to making the diagram the following chunk creates the functions `CDF()` and `ICDF()`. Their `FUN` argument is a density function, which is the type of function from which you will need to sample in your future Gibbs sampler. The argument `nx` is the number of points used to make a piecewise linear approximation to `FUN` on the interval $[a,b]$. If you are debugging a Gibb sampler that uses these functions, remember that they will run faster if `nx` is reduced. You should look at these functions carefully. They are not super-fast, but the algorithms used in them are simple and powerful.  
+
+In the following chunk I make a CDF function. It takes an arbitrary density `FUN`, lower (upper) limits `a` (`b`), and the number of points `nx` at which to calculate the PDF and CDF.  
+
+```{r CDF}
+CDF <- function(FUN, a, b, nx=301, ...) {
+  # no bullet proofing! Accuracy increases with nx, speed declines.
+  x <- seq(a, b, len=nx)
+  fx <- FUN(x, ...) # evaluate density function at x[]
+  Fx <- double(nx)    
+  Fx[1] <- 0.0
+  for (i in 2:nx) { # area of trapezoid = average height x width
+    Fx[i] <- Fx[i-1] + 0.5 * (fx[i] + fx[i-1]) * (x[i] - x[i-1])
+  } 
+  fx <- fx/Fx[nx]   # a PDF sampled at x[]
+  Fx <- Fx/Fx[nx]   # a CDF sampled at x[]
+  data.frame(x=x, fx=fx, Fx=Fx)
+}
+```  
+
+In the following chunk I make an inverse CDF function suitable for a Gibbs sampler. The first argument of `ICDF()` is a probability that must be length 1, because the Gibbs sampler never takes more than one sample at a time.  
+
+```{r ICDF}
+ICDF <- function(p, FUN, a, b, nx=301, ...) {
+  # no bullet proofing! p must be scalar
+  df <- CDF(FUN=FUN, a=a, b=b, nx=nx, ...)
+  ihi <- (1:nx)[df$Fx > p][1]
+  ilo <- ihi - 1
+  xlo <- df$x[ ilo]
+  xhi <- df$x[ ihi]
+  Flo <- df$Fx[ilo]
+  Fhi <- df$Fx[ihi]
+  q <- xlo + (p - Flo)/(Fhi - Flo)*(xhi - xlo)
+}
+```  
+
+In the following chunk I use the inverse CDF function to illustrate the principle of _inverse transform sampling_ which we will use to build our Gibbs sampler.  
+
+```{r ITS-0, fig.asp=0.4, fig.cap="Inverse transform sampling. Left panel: the CDF and PDF; note that the CDF is steepest where the PDF is largest because the PDF is the slope of the CDF. Right panel: samples `u[1:n]` from `dunif(0,1)`, indicated by horizontal lines starting at the y-axis, are mapped to samples `r[1:n]` from the target PDF, indicated by vertical lines ending at the x-axis. More of the `u[1:n]` are intercepted near x-values at which the PDF is largest because that is where the CDF is steepest."}
+mypar(xaxs="i", yaxs="i", mfrow=c(1,2), tcl=-0.3, mar=c(3.5,4,0.5,3.5))
+
+## make a test function
+fun <- function(x) {
+  mix = c(0.5, 0.2, 0.3)
+  mus = c(2.0, 4.0, 7.0)
+  sds = c(0.5, 0.3, 0.5)
+y <- double(length(x))
+for (i in 1:3) 
+  y <- y + mix[i]*dnorm(x, mus[i], sds[i])
+return(y)
+}
+
+## interval for test function
+a <- 0; b <- 10
+## make CDF, plot in left panel
+df <- CDF(FUN=fun, a=a, b=b)
+plot(df$x, df$Fx, type="l", bty="n", ylim=c(0, 1.1), 
+     xlab="", ylab="", panel.first=grid())
+xlab <- expression(italic(x))
+ylab <- expression("CDF("*italic(x)*")")
+title(xlab=xlab, ylab=ylab, line=1.8, cex.lab=1.1)
+
+## add PDF to plot, with axis at right
+right <- seq(0, 1, 0.1)
+fb <- "firebrick"
+axis(4, at=right/1, labels=right, tcl=-0.3, 
+     pos=df$x[length(df$x)], col.axis=fb, 
+     col.ticks=fb, col=fb)
+lines(df$x, df$fx, col=fb)
+ylab4 <- expression("PDF("*italic(x)*")")
+mtext(side=4, ylab4, col=fb, line=1.8, cex=1.1)  
+
+## right panel 
+## plot CDF, PDF again 
+plot(df$x, df$Fx, type="l", bty="n", ylim=c(0, 1.1), 
+     xlab="", ylab="", panel.first=grid())
+xlab <- expression(italic(r))
+ylab <- expression(italic(u))
+title(xlab=xlab, ylab=ylab, line=1.8, cex.lab=1.1)
+axis(4, at=right/1, labels=right, tcl=-0.3, 
+     pos=df$x[length(df$x)], col.axis=fb, 
+     col.ticks=fb, col=fb)
+lines(df$x, df$fx, col=fb)
+mtext(side=4, ylab4, col=fb, line=1.8, cex=1.1)  
+
+## generate some samples
+Nr <- 25
+set.seed(1)
+u <- runif(Nr, 0, 1)
+r <- double(Nr)
+for (i in 1:Nr) r[i] <- ICDF(p=u[i], FUN=fun, a=a, b=b)
+## indicate samples on the plot
+for (i in 1:Nr) {
+  lines(c(0, r[i], r[i]), c(u[i], u[i], 0), 
+        lty=1, lwd=0.5, col=gray(0.5))
+}
+
+```  
+
+There are alternatives to inverse transform sampling (ITS). One of those is slice sampling. Rejection sampling is another. If you look them up on Wikipedia you will see that they are easy to grasp intuitively. Any of those three methods enable us to take a 1D density, and sample from it as if it was a PDF. Slice sampling and rejection sampling don't require us to find the integral of the density, but they have their pitfalls, and on the whole I prefer the ITS approach, not least because you can also use it to write a quantile function analogous to R's suite of quantile functions: `qnorm()`, `qbeta()`, `qgamma()`, etc.  
+
+# Ex 2. A code trick {-}  
+
+(10 pts) The following chunk contains a vector `v` and a scalar `s`. In a single line of code, without if-statements, find the position of the smallest element of `v` that is greater than `s`. Remember: not the element itself, only its position in `v`. 
+
+```{r Ex2}
+set.seed(5)
+v <- sort(runif(100, 2, 11))
+s <- 5
+pos <- min(which(v>s))
+```
+
+**Answer:** The position of the smallest element of `v` that is greater than `s` is `r pos`. I found the minimum value of the which() functions output. The which() function returns the index of true values in a logical vector/matrix. 
+
+# Bayes review {-}  
+
+We need to be clear about exactly what we want our Gibbs sampler to do. Recall the following derivation from A02:  
+
+$$\begin{align}
+p(\theta,y)&=p(\theta,y) &\text{tautology}\\
+p(\theta|y)\cdot p(y) &= p(y|\theta)\cdot p(\theta)
+&\text{product rule}\\
+p(\theta|y) &= \frac{p(y|\theta)\cdot p(\theta)}{p(y)}
+&\text{divide by } p(y) \text{ gives BR1} \\
+&= \frac{p(y|\theta)\cdot p(\theta)}{\int\! d\theta\, p(\theta,y)}
+&\text{marginalization} \\
+&= \frac{p(y|\theta)\cdot p(\theta)}{\int\! d\theta\, p(y|\theta)\cdot p(\theta)}
+&\text{product rule gives BR2} \\
+&\propto p(y|\theta)\cdot p(\theta) 
+&\text{setting y=data gives BR3}\\
+&\propto p(y,\theta) 
+&\text{product rule gives BR4}\\
+\end{align}$$  
+
+For our purposes here, the last line is the important one. It states that the posterior $p(\theta|y)$ is proportional to the joint distribution (of data and parameters), in which the random variable $y$ is fixed at the actual data and the parameters $\theta=(\theta_1,\theta_2,\ldots,\theta_M)$ are free to vary. Our job is therefore to take the density on the right hand side, make it into a statistical distribution and sample from it. We saw above how to sample from a 1-dimensional density. The Gibbs sampler enables us to sample from an M-dimensional density by sampling iteratively from each of its M conditional densities.   
+
+# The GS algorithm {-}  
+We do not _prove_ that the following Gibbs sampler procedure does what we want it to do. We simply state the recipe and ask you to demonstrate it by coding. Here is the recipe:  
+
+1. Choose a random starting point (initial value) $\theta^{(1)}= (\theta^{(1)}_1, \theta^{(1)}_2,\ldots, \theta^{(1)}_M)$.  
+2. Make the funtion $p(y,\theta)$ into a 1-D function of $\theta_1$ by fixing all the components of $\theta$ except the first. We thus have a function $f(\theta_1) = p(y,\theta_1,\theta^{(1)}_{2},\theta^{(1)}_{3},\ldots,\theta^{(1)}_{M})$.  
+3. Use inverse transform sampling (ITS) to draw a sample $\theta_1^{(2)}$ from $f(\theta_1)$.    
+4. Now use ITS to draw a sample $\theta_2^{(2)}$ from the new 1-D function $f(\theta_2)=p(y,\theta_1^{(2)},\theta_{2},\theta_{3}^{(1)},\ldots,\theta_{M}^{(1)})$. (Notice that we are using the _new_ value of $\theta_1$.) 
+5. Now use ITS to draw a sample $\theta_3^{(2)}$ from the 1-D function $f(\theta_3)=p(y,\theta_1^{(2)},\theta_{2}^{(2)}, \theta_3, \theta_4^{(1)})$.  
+6. And so on until drawing a sample $\theta_M^{(2)}$ from the 1-D function $f(\theta_m)=p(y,\theta_1^{(2)},\theta_{2}^{(2)},\ldots, \theta_{M-1}^{(2)}, \theta_M)$. 
+7. We now have an new M-dimensional sample $\theta^{(2)}=(\theta_1^{(2)}, \theta_2^{(2)},\ldots, \theta_M^{(2)})$. Store it with $\theta^{(1)}$.  
+8. Return to step 1, and repeat N times. Be sure to notice in the foregoing that we are updating the components of $\theta$ as we go.  
+
+# A target density {-}
+
+In the following chunk we make a multimodal 2D density function `ptheta()` to use as a test function. The name is intended to remind us that the usual application is to the posterior of a BDA problem.   
+
+```{r testfunction}
+## 2D function of theta1 and theta2
+ptheta <- function(theta1, theta2) {
+  ## returns a vector of length equal to the length of theta1
+  ## or theta2, whichever is longer. 
+  if (length(theta1) != 1 && length(theta2) != 1)
+    stop("ptheta(): One of theta1 and theta2 must be scalar.")
+  mix <- c(0.4, 0.35, 0.25)
+  mu1 <- c(3.0, 5.0 , 7.0 )
+  mu2 <- c(3.0, 7.0 , 5.0 )
+  sds <- c(1.0, 1.0 , 0.9 )
+  val <- double( length(theta1) + length(theta2) - 1 )
+  for (i in 1:length(mix)) {
+    val <- val + mix[i]*dnorm(theta1, mu1[i], sds[i]) * 
+                        dnorm(theta2, mu2[i], sds[i])
+  }
+  return(val)
+}
+```  
+
+The following chunk plots our 2D function to see what our Gibbs sampler will have to deal with.   
+
+```{r GS2, fig.asp=1.0, out.width="80%", fig.cap="The target density used below for tests of a 2D Gibbs sampler."}
+mypar()
+a1 <- a2 <-  0
+b1 <- b2 <- 10
+len1 <- len2 <- 101
+x <- seq(a1, b1, len=len1)
+y <- seq(a2, b2, len=len2)
+z <- array(dim=c(len1, len2))
+for (i1 in 1:len1) {
+  z[i1, ] <- ptheta(x[i1], y)
+}
+xlab <- expression(theta[1])
+ylab <- expression(theta[2])
+image(x=x, y=x, z=z, xlab="", ylab="", bty="o")
+title(xlab=xlab, ylab=ylab, cex.lab=1.5, line=2)
+```
+  
+
+# Ex 3. Write a GS {-}
+(80 pts) Write your Gibbs sampler and run it in the following chunk. I give you the beginning and the end of the chunk to help get you started. While you are debugging, set the number of samples `Ns` to a few hundred, and the number of burn-in samples `burnin` to zero. Depending on the speed of your laptop, try `Ns=2500` and `burnin=500` for your final run. Use the chunks given later to check your results. You will be amazed, I think, at how simple it can be to write your own Gibbs sampler. Of course, you had to write an ITS function first, but that was also pretty simple.  
+
+```{r GS3}
+Ns     <- 5000L  # number of samples
+burnin <- 1000L  # early samples to discard
+a2     <- 0
+b2     <- 10
+set.seed(1)
+
+#initialize theta1 and theta2. 
+sams       <- data.frame(theta1=double(Ns), theta2=double(Ns))  
+sams[1, 1] <- runif(1, a2, b2) #Theta1
+sams[1, 2] <- runif(1, a2, b2) #Theta2
+
+#p = randomly generated probability, FUN = ptheta density function
+for(i in 2:Ns) {   
+  sams[i, 1] <- ICDF(p = runif(1, 0, 1), FUN = ptheta, theta2 = sams[i-1, 2], a=a2, b=b2)
+  sams[i, 2] <- ICDF(p = runif(1, 0, 1), FUN = ptheta, theta2 = sams[i,   1], a=a2, b=b2)
+}
+
+if (burnin > 0) # delete burn-in samples
+  sams <- sams[-(1:burnin), ]
+
+```
+
+I wrote the Gibbs sampler to estimate theta2 first, using theta one and it seems to work as well. I set eval=FALSE so that the chunk will not run. 
+```{r, eval=FALSE}
+#for(i in 2:Ns) {   
+#  sams[i, 1] <- ICDF(p = runif(1, 0, 1), FUN = ptheta(theta1 = sams[,  1], theta2 = sams[i-1, 2]), a=a2, b=b2)
+#  sams[i, 2] <- ICDF(p = runif(1, 0, 1), FUN = ptheta, theta1 = sams[i, 1], theta2 = sams[,    2], a=a2, b=b2)
+#}
+
+I flipped it to get the Gibs sampler to work in reverse by using theta 1 instead of theta 2
+for(i in 2:Ns) {   
+  sams[i, 2] <- ICDF(p = runif(1, 0, 1), FUN = ptheta, theta1 = sams[i-1, 1], a=a2, b=b2)
+  sams[i, 1] <- ICDF(p = runif(1, 0, 1), FUN = ptheta, theta1 = sams[i,   2], a=a2, b=b2)
+}
+
+```
+
+# Check the GS {-}  
+In this next chunk we plot our samples on top of our target density to see how our GS did.  
+
+```{r GS4, fig.asp=1.0, out.width="80%", fig.cap="Samples from the Gibbs sampler displayed on the target PDF. Number of samples generated are 5000, with 1000 of those burned, so 4000 samples are displayed. "}
+mypar()
+image(x=x, y=x, z=z, xlab="", ylab="", bty="o",  
+      main="Density plot of thetas, and Gibbs Sampler simulated data")
+title(xlab=xlab, ylab=ylab, cex.lab=1.5, line=2)
+myblue <- alpha("blue", 0.5)
+points(sams$theta1, sams$theta2, pch=20, cex=0.5, col=myblue)
+legend("topright", bty="n", title="", 
+       cex=0.95,  
+       inset=c(0.03, 0.0),
+       lty=c(1, 2),
+       legend=c("target PDF", "sim data"),
+       col=   c("firebrick",  "blue"))
+```
+
+The following figure gives a 2D kernel density of the samples, with marginal 1D kernel densities on each side. I adapted the code from [R-bloggers](https://www.r-bloggers.com/2014/09/5-ways-to-do-2d-histograms-in-r/) who found it in the book _Computational Actuarial Science with R_ by Arthur Charpentier.   
+
+```{r GS5, eval= FALSE, fig.asp=1.0, fig.cap="A 2D kernel density of the GS samples, with 1D kernel densities of their $\\theta_1$ and $\\theta_2$ components. The agreement of the 2D density with the target density shown in the previous two figures is excellent, but it is surprising how misleading the marginals can be when the target density is multimodal, as it is here."}
+Ncells <- 50
+den1 <- density(sams$theta1, from=a1, to=b1)     # theta1 
+den2 <- density(sams$theta2, from=a2, to=b2)     # theta2
+top <- max(den1$y, den2$y)
+k <- kde2d(sams$theta1, sams$theta2, n=2*Ncells) # both
+
+# plot 2D kernel density of samples (theta1, theta2)
+mypar(mar=c(3, 3, 1, 1)) 
+mat <- matrix(c(2,0,1,3), 2, 2, byrow=T)
+layout(mat=mat, widths=c(4,1), heights=c(1,4))
+image(k, bty="o") 
+title(xlab=xlab, ylab=ylab, cex.lab=1.2, line=1.7)
+
+# plot 1D kernel density of theta1 samples
+mypar(mar=c(0, 3.5, 1, 1.5))
+plot(den1$x, den1$y, type="l", axes=F, xaxs="i", yaxs="i", 
+     col="firebrick", lwd=2, ylab="", bty="n", ylim=c(0, top), 
+     panel.first=grid())
+lines(range(den1$x), c(0, 0), col="firebrick")
+text(5, top/2, xlab, cex=2)   # xlab created above
+
+# plot 1D kernel density of theta2 samples
+mypar(mar=c(3.5, 0, 1.5, 1))
+plot(den2$y, den2$x, type="l", axes=F, yaxs="i", xaxs="i", xlab="",
+     col="firebrick", lwd=2, ylab="n", bty="n", xlim=c(0, top), 
+     panel.first=grid())
+lines(c(0, 0), range(den2$x), col="firebrick")
+text(top/2.5, 5, ylab, cex=2) # ylab created above
+```
+
+Many packages contain functions that make pairs plots. One is `base::pairs()`, which is demonstrated in the following chunk using example code from the `pairs()` entry at [www.rdocumentation.org](www.rdocumentation.org). More specifically, the entry for `pairs()` can be found [here](https://www.rdocumentation.org/packages/graphics/versions/3.6.2/topics/pairs). Run the following chunk and toggle the plots that appear.  
+
+```{r pairsdemo, eval=FALSE}
+pairs(iris[1:4], main = "Anderson's Iris Data -- 3 species",
+      pch = 21, 
+      bg = c("red", "green3", "blue")[unclass(iris$Species)])
+
+## formula method, "graph" layout (row 1 at bottom):
+pairs(~ Fertility + Education + Catholic, data = swiss, 
+      row1attop=FALSE,
+      subset = Education < 20, 
+      main = "Swiss data, Education < 20")
+
+# Use gap argument to not waste plotting area
+pairs(USJudgeRatings, gap=1/10) 
+
+## Show only lower triangle, and suppress labeling
+pairs(USJudgeRatings, text.panel = NULL, upper.panel = NULL)
+
+## put histograms on the diagonal
+panel.hist <- function(x, ...)
+{
+    usr <- par("usr"); on.exit(par(usr))
+    par(usr = c(usr[1:2], 0, 1.5) )
+    h <- hist(x, plot = FALSE)
+    breaks <- h$breaks; nB <- length(breaks)
+    y <- h$counts; y <- y/max(y)
+    rect(breaks[-nB], 0, breaks[-1], y, col = "cyan", ...)
+}
+pairs(USJudgeRatings[1:5], panel = panel.smooth,
+      cex = 1.5, pch = 24, bg = "light blue", horOdd=TRUE,
+      diag.panel = panel.hist, cex.labels = 2, font.labels = 2)
+
+## put (absolute) correlations on the upper panels,
+## with size proportional to the correlations.
+panel.cor <- function(x, y, digits = 2, prefix = "", cex.cor, ...)
+{
+    usr <- par("usr"); on.exit(par(usr))
+    par(usr = c(0, 1, 0, 1))
+    r <- abs(cor(x, y))
+    txt <- format(c(r, 0.123456789), digits = digits)[1]
+    txt <- paste0(prefix, txt)
+    if(missing(cex.cor)) cex.cor <- 0.8/strwidth(txt)
+    text(0.5, 0.5, txt, cex = cex.cor * r)
+}
+pairs(USJudgeRatings, lower.panel = panel.smooth, 
+      upper.panel = panel.cor, gap=0, row1attop=FALSE)
+
+# plot all variables on log scale
+pairs(iris[-5], log = "xy") 
+
+# log just the first four
+pairs(iris, log = 1:4, 
+      main = "Lengths and Widths in [log]", 
+      line.main=1.5, oma=c(2,2,3,2))
+```
+
+

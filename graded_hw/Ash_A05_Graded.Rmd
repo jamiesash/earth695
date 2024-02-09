@@ -1,0 +1,543 @@
+---
+title: "Ash_A05"
+author: "Jamie Ash"
+date: "due: 2021-02-20"
+output: 
+  #html_document: 
+  bookdown::html_document2:  
+    self-contained: yes
+    theme: cerulean #paper #cosmo #journal #readable
+    toc: true
+    smooth_scroll: true
+    toc_depth: 3
+    toc_float: true
+    number_sections: true
+    fig_caption: yes
+    code_folding: hide
+    # bibliography: ["geothermal.bib", "r.bib"]
+    # csl: apa-5th-edition.csl
+    # link-citations: yes
+---  
+
+<style type="text/css">  
+/* Note: CSS uses C-style commenting. */
+h1.title{font-size:22px; text-align:center;}
+h4.author{font-size:16px; text-align:center;}
+h4.date{font-size:16px; text-align:center;}
+body{ /* Normal  */ font-size: 13px}
+td {  /* Table   */ font-size: 12px}
+h1 { /* Header 1 */ font-size: 16px}
+h2 { /* Header 2 */ font-size: 14px}
+h3 { /* Header 3 */ font-size: 12px}
+.math{ font-size: 10pt;}
+.hi{ /* hanging indents */ 
+    padding-left:22px; 
+    text-indent:-22px;
+}
+blockquote {  
+    padding: 10px 20px;
+    margin: 0 0 20px;
+    font-size: 12px;
+    border-left: 5px solid #eee;
+}
+code.r{ /* code */ 
+       font-size: 12px;
+}
+pre{/*preformatted text*/ 
+    font-size: 12px;
+}
+p.caption {/* figure captions */ 
+    font-size: 1.0em;
+    font-style: italic; 
+} 
+</style>
+
+```{r setup, echo=FALSE}
+rm(list=ls()) # clean up
+
+## load packages quietly
+shhh <- suppressPackageStartupMessages # It's a library, so shhh!
+want <- c("knitr", "runjags", "coda", "MASS", "Matrix", "kableExtra",
+          "zeallot", "magrittr", "scdensity")
+for (pkg in want) shhh(library(pkg, character.only=TRUE))
+
+## set some chunk options
+gr <- (1+sqrt(5))/2 # golden ratio, for figures
+opts_chunk$set(comment="  ",
+               #echo=FALSE,
+               cache=c(TRUE, FALSE)[1], 
+               eval.after="fig.cap",
+               collapse=TRUE, 
+               dev="png",
+               fig.width=7.0,
+               out.width="95%",
+               fig.asp=0.9/gr,
+               fig.align="center"
+               )
+
+## Kruschke's utility functions (edited by NF for use in RMarkdown)
+#if (c(TRUE,FALSE)[2]) source("DBDA2E-utilities.R") 
+
+## handy function to color text
+colorize <- function(x, color) {
+  ## x is a string
+  ## example:`r colorize("The assignment", "red")`
+  if (knitr::is_latex_output()) {
+    sprintf("\\textcolor{%s}{%s}", color, x)
+  } else if (knitr::is_html_output()) {
+    sprintf("<span style='color: %s;'>%s</span>", color, x)
+  } else x
+}
+
+mypar <- # Convenience wrapper for par()
+## Values are from Bloomfield (2014) "Using R for Numerical Analysis
+## in Science and Engineering." See ?par for meanings.
+function(mgp=c(2,0.5,0), mar=c(4,4,1.5,1.5), bty="l", 
+         bg=gray(0.97), tcl=0.3, mex=0.8, cex.main=0.9,
+         font.main=1,...) 
+  par(mgp=mgp, mar=mar, bty=bty, bg=bg, tcl=tcl, mex=mex,
+      cex.main=cex.main, font.main=font.main,...) 
+
+## fresh start? (This should not be necessary.)
+rmCache <- c(TRUE, FALSE)[2] 
+if (rmCache)
+  if (file.exists("Frazer_A05_cache")) 
+    unlink("Frazer_A05_cache", recursive=TRUE)
+```  
+
+\newcommand{\logit}{\mathrm{logit}}
+\newcommand{\expit}{\mathrm{expit}}
+
+# Score & comments {-}  
+
+Score:  74/100. Very good! This was a tough assignment.   
+
+Ex 1. 0/5. You forgot to do this one.  
+
+Ex 2. 14/15. Excellent!   
+
+- On the last line where you say "combine exponents" the second factor on the LHS should be $e^{-\lambda(N+\beta)}$, right?  
+
+- You wrote "Improper density functions are handled by truncating the tails i.e. setting the shape and rate to a very low value such as $\alpha = \beta = 0.001$", but---you will want to remember this---setting the shape and rate to 0.001 does not "truncate the tails". (Truncating the tails would mean multiplying the gamma by `dunif(a,b)` in which $a$ is a small number just greater than zero and $b$ is a very large number.) What setting shape and rate to 0.001 actually does is make the gamma look a lot like the reciprocal density.    
+
+Ex 3. 15/15. Excellent. You are getting good with the LaTeX.  
+
+Ex 4. 15/25. You are on the right track here, and if you'd had more time you probably would have nailed it.  
+
+Ex 4(a). Great, but don't use `*` for multiplication in math. Use `*` for multiplication in code, but in math, the asterisk means either convolution or some other esoteric type of product. When you want to be explicit about multiplication in math use `\cdot` or `\times`.  
+
+Ex 4(b). Nope, sorry. The prior should not contain any data, $y$. And your last line says "finding the likelihood of the prior", which makes no sense, right? There is a likelihood and there is a prior, but there is no likelihood _of_ the prior. On the last line there is a quantity $\sum u_i$ that magically appears.     
+
+Ex 4(c)-(d). Yes, you are reaching here. I didn't help you very much because I meant to say "in the limit as one of the parameters approaches **zero**" instead of "in the limit as one of the parameters approaches infinity". Anyway, see the solutions.  
+
+Ex 5. 30/40.  
+
+- Your `bug1` is on the right track. You took the time to read the JAGS manual where you discovered `ifelse()`. Your priors are perfect, and your observation loop is sort of sensible. However, your expression for `mu[i]` cannot be right because every term has the common factor `t[i]`.  
+
+- In your initial values you have the statements  
+```
+   a  <- double(3)
+   b  <- double(3)
+  cp  <- double(2)
+```  
+But all they do is create storage. You need to give them numerical values.  
+
+- In your `run.jags()` chunk you are monitoring the right quantities. Good!   
+
+# Goals {-}   
+The goals of this assignment are: (1) Briefly revisit the multilevel model from A04. (2) Introduce the Poisson process and its natural conjugate prior. (3) Discover the natural conjugate prior for a Normal distribution with known precision and unknown mean. (4) Use JAGS to estimate the change points in a regime change problem.         
+
+# Tiny R-tips {-}  
+- Pre-allocating storage makes code run faster, so it is important to know how to create empty vectors. To create an empty atomic vector of length 10 you would type `double(10)` or `integer(10)` or `logical(10)`. To create an empty list you would type `vector("list", 10)`. The functions `double()`, `integer()` and `logical()` are convenience wrappers for `vector()`.   
+- This is html not R, but if you want to insert an extra blank line somewhere in your html, put `<p>&nbsp;</p>` there.  
+- This is a thank-you, not a tip. Reading your assignments is teaching me how to use `curve()`. My Fortran/Matlab background makes me write code like this...
+```
+x <- seq(-2, 2, len=301)
+y <- dnorm(x, 3.5, 2)
+lines(x, y)
+```
+When I could be coding...
+```
+curve(dnorm(x, 3.5, 2), -2, 2, n=301, add=TRUE)
+```
+
+# Ciguatera revisited {-}  
+Recall that on island `i` we sampled `n[i]` kahala (amberjack, _S. rivoliana_), finding ciguatoxin in `y[i]` of them. Our goal was to obtain a posterior (beta) PDF for the prevalence of ciguatoxin in _S. rivoliana_ near each island. Some islands are data poor, but our multilevel model allows the results for the data poor islands to _borrow strength_ from the data rich islands. The model characterizes each island's beta distribution by its mode and concentration. The mode for each island is drawn from the same parent beta, and the concentration for each island is drawn from the same parent gamma.  
+
+Here is the BUGS model of A04 with a few obvious changes of variable names for convenience. In particular, we now write `eps` to represent the small number used for parameter values in vague priors. We usually want to make `eps` as small as possible without causing numerical problems.   
+
+```
+/* observations */
+for (i in 1:length(n)) {
+  y[i] ~ dbin(phi[i], n[i])
+}
+
+/* prevalence for each island */
+for (i in 1:length(n)) {
+  phi[i] ~ dbeta(s1[i], s2[i])
+}
+
+/* mode and concentration for each island */
+for (i in 1:length(n)) {
+  s1[i] <- 1 + om[i]*km[i] 
+  s2[i] <- km[i] + 2 - s1[i]
+  om[i] ~ dbeta(s1_0, s2_0)
+  km[i] ~ dgamma(s_0, r_0)
+}
+
+/* parameters of parent distribution for om[] */
+s1_0 <- 1 + om_0*km_0
+s2_0 <- km_0 + 2 - s1_0
+om_0 ~ dbeta(eps, eps)
+km_0 ~ dgamma(eps, eps)
+
+/* parameters of parent distribution for km[] */
+s_0 ~ dgamma(eps, eps)
+r_0 ~ dgamma(eps, eps)
+```  
+<p>&nbsp;</p>  
+We write out the full posterior PDF for this model. As we need to transform readily from the shape parameters of the beta PDF to its mode and concentration, recall the formulas for mode $\omega$ and concentration $\kappa$. We use $\kappa_m=\kappa-2$ rather than $\kappa$, confining $\kappa_m$ to positive values so that $\kappa > 2$. The formulas are:     
+
+$$
+\omega = \frac{s_1 - 1}{s_1 + s_2 - 2};\ \ \ \ \kappa_m = s_1 + s_2 - 2
+$$  
+
+Solving those formulas for the shape parameters gives the two functions we need:  
+
+$$
+s_1(\omega,\kappa_m) = 1 + \omega\,\kappa_m;\ \ \ \ \ 
+s_2(\omega,\kappa_m) = 1 + \kappa_m\,(1-\omega)
+$$  
+
+With these formulas we can begin to write the posterior PDF as follows, using $\phi$ for prevalence, and the delta function for deterministic relations:    
+
+$$\begin{align}
+p(\pmb{\phi}, \pmb{\omega}, \pmb{\kappa}_m, 
+\pmb{s}_1, \pmb{s}_2, s_{1,0}, s_{2,0}, \omega_0, \kappa_{m,0},
+s_0, r_0|\pmb{y}, \pmb{n}, \epsilon) 
+&\propto
+\prod_{i=1}^{N_i}\textrm{dbinom}(y_i|\phi_i,n_i)\\
+&\times
+\textrm{dbeta}(\phi_i|s_{1,i}, s_{2,i})\\
+&\times 
+\delta\left(s_{1i} - s_1(\omega_i,\kappa_{m,i})\right)\cdot
+\delta\left(s_{2i} - s_2(\omega_i,\kappa_{m,i})\right)\\
+&\times
+\textrm{dbeta}(\omega_i|s_{1,0}, s_{2,0})\cdot
+\text{dgamma}(\kappa_{m,i}|s_0,r_0)\\
+&\times
+\delta\left(s_{1,0} - s_1(\omega_0,\kappa_{m,0})\right)\cdot
+\delta\left(s_{2,0} - s_2(\omega_0,\kappa_{m,0})\right)\\
+&\times 
+\textrm{dbeta}(\omega_0|\epsilon,\epsilon)\cdot
+\text{dgamma}(\kappa_{m,0}|\epsilon,\epsilon)\\
+&\times
+\text{dgamma}(s_0|\epsilon,\epsilon)\cdot
+\text{dgamma}(r_0|\epsilon,\epsilon)
+\end{align}$$  
+
+Integrating over all the $s_{1,i}$, $s_{2,i}$, as well as $s_{1,0}$ and $s_{2,0}$ then gives  
+
+$$\begin{align}
+p(\pmb{\phi}, \pmb{\omega}, \pmb{\kappa}_m, \omega_0, \kappa_{m,0},
+s_0, r_0|\pmb{y}, \pmb{n}, \epsilon) 
+&\propto
+\prod_{i=1}^{N_i}\textrm{dbinom}(y_i|\phi_i,n_i)\\
+&\times\textrm{dbeta}(\phi_i|s_1(\omega_i,\kappa_{m,i}), 
+s_2(\omega_i,\kappa_{m,i}))\\
+&\times
+\textrm{dbeta}(\omega_i|s_1(\omega_0,\kappa_{m,0}), 
+s_2(\omega_0,\kappa_{m,0}))\cdot
+\text{dgamma}(\kappa_{m,i}|s_0,r_0)\\
+&\times 
+\textrm{dbeta}(\omega_0|\epsilon,\epsilon)\cdot
+\text{dgamma}(\kappa_{m,0}|\epsilon,\epsilon)\\
+&\times
+\text{dgamma}(s_0|\epsilon,\epsilon)\cdot
+\text{dgamma}(r_0|\epsilon,\epsilon).
+\end{align}$$  
+
+It is worth remarking (since H&H get this wrong) that the predictor variables $n_i$ appear on both sides of the above equation. If some quantity affects your answer, think carefully before you leave it out of your equations, even if it is fixed. Leaving something out can add confusion.  
+
+# Ex 1. What helps? {-}  
+(5 pts) Does that last equation help you understand the BUGS model? Which speaks to you most clearly, the BUGS or the math? (I am not looking for a particular answer here.)  
+
+# Kernels {-}  
+The word _kernel_ is used in the phrase _kernel density function_ to denote the identical building blocks of a mixture PDF. In Bayesian statistics it is also used to denote the factors in a PDF that depend on the parameters. Thus the kernel of the Poisson PMF is $\lambda^ye^{-\lambda}$, the kernel of the beta PDF is $\phi^{\alpha-1}(1-\phi)^{\beta-1}$, the kernel of the binomial PMF is $\phi^y(1-\phi)^{n-y}$, the kernel of the gamma PDF is $\lambda^{\alpha-1}e^{-\beta\lambda}$ and the kernel of a univariate Normal is $\sqrt{\tau}\exp(-\tau(y-\mu)^2/2)$, in which $\tau=1/\sigma^2$ is the precision.^[You will see in Ex 4 how helpful it can be to work with precision rather than variance or SD.] If the precision of the Normal is known (so the only unknown is $\mu$) the kernel becomes $\exp(-\tau \mu^2/2 + \tau y \mu)$.  
+
+# Poisson process (PP) {-}  
+
+The Poisson process is probably familiar, but we review it here in the Bayesian context.  
+
+Recall our earlier ticks-on-sheep example. The probability of $y$ ticks on a sheep is $p(y|\lambda)=e^{-\lambda}\lambda^y/y!$ where the _intensity_ $\lambda$ is the expected number of ticks. Now consider the density of, say, wildebeest, on the Serengeti plain (H&H p11, p210) at a particular moment in time, and let $r$ be the expected number of wildebeest per km^2^. Assuming wildebeest are Poisson distributed across the plain (we'll revisit this assumption in a later assignment), the probability distribution for the number of wildebeest in area $A$ km^2^ is $p(y|r,A)=e^{-rA}(rA)^y/y!$    
+
+# Ex 2. Prior for PP {-} 
+
+(15 pts) **(a)** What is the natural conjugate prior of a Poisson process? **(b)** What is the uninformative prior? Hints: The area $A$ is assumed known, so the answer is a distribution for $r$; it should look familiar. 
+
+## Solution to Ex 2. {-} 
+**Answer:** To find the pdf of the conjuget prior distribution for the Poisson distribution I multiplied the Poisson distribution by the gamma distribution (chosen through trial and error), and found that the product of the Poisson and gamma distributions was a pdf of a similar for to the chosen gamma distribution meaning the gamma is the conjuget to the Poisson distribution. The process is shown below...
+
+$$\begin{align}
+&\lambda^{\Sigma n}e^{-N\lambda} *  \lambda^{\alpha-1}e^{-\beta\lambda}
+&\textrm{Poisson liklehood x gamma} \\
+&\lambda^{\Sigma n+(\alpha-1)} e^{-\lambda N-\beta\lambda}
+&\textrm{combine exponents} \\
+&\lambda^{\alpha + \Sigma n-1} e^{-\lambda (N-\beta)}
+&\textrm{combine exponents} \\
+\end{align}$$  
+
+The product is a gamma function with a similar form to the gamma prior, so the conjugate prior for a Poisson Process is the gamma distribution. The kernel for the prior gamma distribution is expressed as...
+$$
+[y|\alpha,\beta] = y^{\alpha-1}e^{-\beta y} 
+$$
+With the posterior gamma's $\alpha$ and $\beta$ equal to $\alpha+\sum{y_i}$ and $\beta+n$ respectively. **b** The mean of the gamma distribution is shape divided by rate, so the posterior mean of the gamma is..
+$$
+mean(gamma(\lambda|\pmb{n},\alpha,\beta))=\frac{\alpha+\Sigma\pmb{n}}{\beta+N}
+$$  
+With no prior knowledge of the rate or shape the mean becomes $\frac{\Sigma\pmb{n}}{N}$. So, the uninformative prior for the Poisson is a gamma with $\alpha = \beta = 0$, which is an improper density function (I believe the integral goes to infinity). Improper density functions are handled by truncating the tails i.e. setting the shape and rate to a very low value such as $\alpha = \beta = 0.001$. So, the uninformative prior for the Poisson distribution is a gamma with shape and rate equal to 0.001, or $gamma(0.001, 0.001)$.
+
+
+# Ex 3. CoP {-}  
+ (15 pts) Switching from wildebeest to the cougar _Puma concolor,_ let's use $r$ to denote female population density (individuals per km^2^) and $s=1/r$ to denote female territory size in km^2^. As neither is more important than the other, the uninformative distribution for $r$ should be equally uninformative for $s$. Use the conservation of probability formula $p_s(s)=p_r(r)|dr/ds|$ to show that $p_s(s)\propto 1/s$ is equivalent to $p_r(r)\propto 1/r$, and thus the reciprocal density is the uninformative density for both quantities. Hint: To avoid confusion, keep those subscripts on the PDFs.     
+
+## Solution to Ex 3 {-}  
+To show that $p_s(s)\propto 1/s$ is equivalent to $p_r(r)\propto 1/r$, and the reciprocal density is the uninformative density for both quantities I use the conservation of probability formula $p_s(s)=p_r(r)|dr/ds|$ shown below... 
+$$\begin{align}
+p_s(s) &= p_r(r) |\frac{dr}{ds}| 
+&\textrm{conservation of probability} \\
+p_s(s) &= p_r(r) |\frac{ds^{-1}}{ds}| 
+&\textrm{substitute s for r in numerator} \\
+p_s(s) &= p_r(r)(s^{-2}) 
+&\textrm{take derivative} \\
+p_s(s) &= \frac{1}{r}(s^{-2}) 
+&\textrm{pr(r)=1/r} \\
+p_s(s) &= \frac{1}{r}(r^{2}) 
+&\textrm{substitute r for s} \\
+p_s(s) &= r
+&\textrm{} \\
+p_s(s) &= \frac{1}{s}
+&\textrm{ substitute r for s } \\
+\end{align}$$  
+
+# Ex 4. Prior for Normal {-}  
+(25 pts) **(a)** Show that the kernel of the likelihood for normal data with known precision is $\exp(-N\tau \mu^2/2 + \tau \mu \Sigma y_i )$. **(b)** Show that the natural conjugate prior for a Normal likelihood with known precision is a Normal $N(\mu|\mu_0,\tau_0)$. **(c)** Derive the mean and variance of the posterior in (b). **(d)** Show that the uninformative prior for a Normal likelihood with known precision is the uniform distribution, realized in the limit as one parameter of the natural conjugate prior goes to infinity and the value of the other parameter doesn't matter.   
+
+## Solution to Ex 4. {-}  
+**Answer to Ex 4a)**: Starting with the kernel for the Normal distribution, I use the multiplicity operator $\Pi$ from 1 to a large value to get the kernel for the likelihood for normal data with known precision, $\exp(-N\tau \mu^2/2 + \tau \mu \Sigma y_i )$.
+$$
+\Pi_{i}^{N}\exp(-\tau \mu^2/2 + \tau y_i \mu)\\
+\exp(-\tau \mu^2/2 + \tau y_1 \mu)*\exp(-\tau \mu^2/2 + \tau y_2 \mu)*\exp(-\tau \mu^2/2 + \tau y_3 \mu)...\\
+exp(-\tau \mu^2/2 + \tau y_1 \mu + -\tau \mu^2/2 + \tau y_2 \mu + -\tau \mu^2/2 + \tau y_3 \mu...)\\
+\exp(-N\tau \mu^2/2 + \tau \mu \Sigma y_i )
+$$
+
+**Answer Ex 4b:** To show that the natural conjugate prior for a Normal likelihood with known precision is a Normal $N(\mu|\mu_0,\tau_0)$. I begin with the PMF of a Normal distribution, substitute $u_0$, $\tau_0$, and $u_i$ in for $u_0$, $\tau_0$, and $y$ respectively. Then I simplify the equation and find the likelihood (not shown but similar to 4a and maybe not necissary). 
+
+$$\begin{align}
+&N(\mu|\mu_0,\tau_0)=\sqrt{\tau_0}\exp(-\tau_0(y-\mu_{0})^2/2)
+&\textrm{normal probability distribution function} \\
+&N(\mu|\mu_0,\tau_0)=\sqrt{\tau_0}\exp(-\tau_0(y^2-2\mu_0y+\mu_0^2)/2)
+&\textrm{FOIL} \\
+&N(\mu|\mu_0,\tau_0)=\sqrt{\tau_0}\exp((-\tau_0y^2+2\tau_0\mu_0y-\tau_0\mu_0^2)/2)
+&\textrm{distribute tau} \\
+&N(\mu|\mu_0,\tau_0)=\sqrt{\tau_0}\exp(\frac{-\tau_0y^2}{2}+\tau_0\mu_0y-\frac{\tau_0\mu_0^2}{2}) 
+&\textrm{divide by 2} \\
+&N(\mu|\mu_0,\tau_0)=\exp(-\frac{\tau_0\mu_0^2}{2} + \tau_0\mu_0y)
+&\textrm{remove constant terms, because precision is know} \\
+&N(\mu|\mu_0,\tau_0)=\exp(-\frac{N\tau_0\mu_0^2}{2} + \tau_0\mu_0 \Sigma{u_i})
+&\textrm{finding the liklehood of the prior} \\
+\end{align}$$  
+
+**Answer Ex 4c:** To find the conjugate posterior distribution for the Normal likelihood function, I multiply the kernel of the Normal likelihood, $\exp(-N\tau \mu^2/2 + \tau \mu \Sigma y_i )$, by the kernel for the conjugate prior, ($N(\mu|\mu_0,\tau_0)$). Then I find the mean and standard deviation of that function. 
+
+$$\begin{align}
+&posterior=\exp(-\frac{N\tau_0\mu_0^2}{2} + \tau_0\mu_0\Sigma{u_i}) * \exp(\frac{-N\tau \mu^2}{2} + \tau \mu \Sigma y_i)
+&\textrm{likelihood times prior} \\
+&posterior=\exp(\frac{-\tau_0\mu_0^2}{2} + \frac{-N\tau \mu^2}{2} + \tau_0\mu_0\Sigma{u_i} + \tau \mu \Sigma y_i)
+&\textrm{combine like terms} \\
+&posterior=\exp(-\frac{\tau_0\mu_0^2+N\tau \mu^2}{2} + \tau_0\mu_0\Sigma{u_i} + \tau \mu \Sigma y_i)
+&\textrm{} \\
+\end{align}$$ 
+
+The mean and variance of the conjugate posterior is given in the H&H text on page 282 as...
+$$
+u_0=\frac{\frac{u_0}{\sigma_0^2} + \frac{\sum{y_i}}{\sigma^2}}{\frac{1}{\sigma_0^2}+\frac{N}{\sigma^2}}\\ 
+\sigma_0 = (\frac{1}{\sigma_0^2}+\frac{N}{\sigma^2})^{-1}
+$$
+Using percision $\tau = \frac{1}{\sigma^2}$ the mean and variance simplify to...
+$$
+u_0=\frac{\tau_0 + \tau\sum{y_i}}{\tau_0+\tau N}\\ 
+\sigma_0 = (\tau_0+\tau N)^{-1}
+$$
+**Answer Ex 4c:** The natural conjugate prior of the Normal likelihood is a normal distribution with a kernel of form $N(\mu|\mu_0,\tau_0)=\exp(-\frac{N\tau_0\mu_0^2}{2} + \tau_0\mu_0 \Sigma{u_i})$. The kernel for a Uniform distribution is $\frac{1}{\alpha-\beta}$ and \alpha and \beta in terms of the mean and standard deviation are $\beta = u+\sigma \sqrt{3}$ and $\beta = u-\sigma \sqrt{3}$. Rewriting the kernel for the continuous uniform distribution in terms of mean and standard deviation we get..
+
+$$\begin{align}
+&uniform(y|\alpha, \beta) = \frac{1}{(u+\sigma \sqrt{3})+(u-\sigma \sqrt{3})} 
+&\textrm{sub in u and o} \\
+&uniform(y|\alpha, \beta) = \frac{1}{2u} 
+&\textrm{combine like terms} \\
+\end{align}$$
+
+For the Normal Distribution with kernel $N(\mu|\mu_0,\tau_0)=\exp(-\frac{N\tau_0\mu_0^2}{2} + \tau_0\mu_0 \Sigma{u_i})$ as the sample size increases to infinity the kernel then only becomes dependent on $\Sigma u_i$ (and $N$) similar to the uniform distribution (also only dependent on $u$). I'm clearly missing something here and reaching for an answer. 
+
+# Change points {-}   
+In statistical modeling we would like to be able to handle _regime change_ in which a parameter suddenly changes behavior, and the location of the change point(s) is part of the model. The simplest such models are broken-stick models, in which there is a sudden change of slope. There are many R packages to handle such models, the most recent of which is Jonas K. Lindelov's [mcp package](https://lindeloev.github.io/mcp/) which is built around JAGS. Lindelov also gives an [overview](https://lindeloev.github.io/mcp/articles/packages.html) of many of the other change point packages. You do not need to read any of that for this exercise, but I was impressed when I looked at it---it seems like quite a package!  
+
+We will use the cumulative change point formulation as our underlying mathematical model. With two change points the model may be written like this:    
+
+$$\begin{align}
+&f(t) = f_1(t_1) + I(t\gt \xi_1)f_2(t_2) + I(t\gt \xi_2)f_3(t_3)\\\\
+&t_1= \min(t,\xi_1);\ \ \ 
+t_2=\min(t,\xi_2) - \xi_1;\ \ \ 
+t_3=\max(t,\xi_2) - \xi_2
+\end{align}$$  
+
+
+# Ex 5. Broken stick {-}  
+(40 pts) In this exercise you will **(a)** simulate some broken-stick data and **(b)** write a BUGS model to analyze using JAGS. To keep things simple we will make the $f_i()$ linear, and I do part (a) for you
+
+## Solution to Ex 5. {-}  
+
+**(a)** The following chunk simulates some data with change points and a mixture noise process.  
+
+```{r Ex5, out.width="80%", fig.cap="Data for the change point problem. There appear to be at least two change points and several outliers."}
+set.seed(13456)
+f <- function(t, ab, i) ab[i, "a"] + t*ab[i, "b"]
+
+## intercepts and slopes
+ab <- data.frame(a=c(1, 0.25, -0.4), b=c(0.3, 0.0, -0.25))
+
+## times to sample
+t <- seq(0, 10, len=101)
+
+## change points
+cp <- c(3, 7)
+
+## the ti
+t1 <- pmin(t, cp[1])
+t2 <- pmin(t, cp[2]) - cp[1]
+t3 <- pmax(t, cp[2]) - cp[2]
+
+## the mean
+mu <- f(t1, ab, 1) + (t > cp[1])*f(t2, ab, 2) + (t > cp[2])*f(t3, ab, 3)
+sd <- sample(c(0.1, 0.6), size=length(t), prob=c(9, 1), replace=TRUE)
+noise <- rnorm(length(t), mean=0, sd=sd) 
+y <- mu + noise
+
+mypar()
+xlab <- expression(italic(t))
+ylab <- expression(italic(f(t)))
+plot(t, y, type="p", pch=3, xlab="", ylab="", ylim=c(0, 3.5),  
+     panel.first=grid(), cex.lab=1.1)
+title(main="Synthetic data: f(t) and t", xlab=xlab, ylab=ylab, cex.lab=1.2)
+lines(t,mu, col='red')
+```  
+
+**(b)** In the following chunk I create a character string containing a BUGS model for use with `run.jags()`. Based on the plotted data, I decide to assume that there are only two change points, the first one less than 5 and the second one greater than 5. Therefore, among my priors will be the statements `cp[1] ~ dunif(0, 5)` and `cp[2] ~ dunif(5, 10)`. As the data are fairly noisy, with at least one obvious outlier, I will use a linear model between change points with uniform priors for the slopes and intercepts. For the (assumed additive) noise I will use a t-distribution with 3 degrees of freedom in order to accommodate the outliers.  
+
+```{r Ex5b}
+bug1 <- "model {
+    /* model 2*/
+    for (i in 1:N) {
+     mu[i] <- t[i]*ifelse(t[i]-cp[1]<0, b[1], 0) + 
+     t[i]*ifelse(t[i]-cp[1]>0 & t[i]-cp[2]<0, b[2], 0) + 
+     t[i]*ifelse(t[i]-cp[2]>0, b[3], 0) + 
+     t[i]*ifelse(t[i]-cp[1]<0, a[1], 0) + 
+     t[i]*ifelse(t[i]-cp[1]>0 & t[i]-cp[2]<0, a[2], 0) + 
+     t[i]*ifelse(t[i]-cp[2]>0, a[3], 0)
+     y[i] ~ dt(mu[i], tau, dof)
+    }
+    
+    /* priors */
+    cp[1] ~ dunif(0, 5)
+    cp[2] ~ dunif(5, 10)
+    a[1] ~ dunif(-100, 100)
+    a[2] ~ dunif(-100, 100)
+    a[3] ~ dunif(-100, 100)
+    b[1] ~ dunif(-100, 100)
+    b[2] ~ dunif(-100, 100)
+    b[3] ~ dunif(-100, 100)
+    sigma  ~ dgamma(eps, eps)
+    tau <- 1/sigma^2
+    
+}"
+```
+
+In the following chunk I create a list of initial values. It is a list of lists, with one list for each chain.  
+
+```{r Ex5d}
+nChains <- 3
+set.seed(1234)
+RNGs <- c("base::Super-Duper", "base::Wichmann-Hill", 
+          "base::Marsaglia-Multicarry", "base::Mersenne-Twister")
+RNGs <- rep(RNGs, 3) # allows up to 12 chains
+inits <- vector("list", nChains)
+for (ic in 1:nChains) {
+  
+  cp1 <- runif(1 , 0, 5)
+  cp2 <- runif(1, 5, 10)
+  a1  <- runif(1, -100, 100)
+  a2  <- runif(1, -100, 100)
+  a3  <- runif(1, -100, 100)
+  b1  <- runif(1, -100, 100)
+  b2  <- runif(1, -100, 100)
+  b3  <- runif(1, -100, 100)
+  tau <- rgamma(1, shape=0.001, rate=0.001)
+  a   <- double(3)
+  b   <- double(3)
+  cp  <- double(2)
+  
+  inits[[ic]] <- list(cp = c(cp1, cp2),
+                      a  = c(a1, a2, a3),
+                      b  = c(b1, b2, b3),
+                      tau     = tau)
+  }
+                      #RNG.name = RNGs[ic],
+                      #.RNG.seed = ic + 1)  
+``` 
+
+In the following chunk I create a list of data to be given to `run.jags()`.  
+
+```{r Ex5c}
+eps <- 0.01
+dof  <- 3
+N <- length(t)
+data_1 <- list(t=t,
+               y=y, 
+               N=N,
+               eps=eps,
+               dof=dof
+               )
+
+``` 
+
+In the following chunk I call `run.jags()` to run the model.  
+
+```{r Ex5e, eval=FALSE}
+#rjo <- # S3 object of class "runjags"
+#  run.jags(
+#           monitor = c("cp", "a", "b", "tau") # keep samples for these 
+#          )
+# If this crashes, type failed.jags() in the console for suggestions.
+set.seed(987)
+burnin <- 1000
+rjo <- # S3 object of class "runjags"
+  run.jags(model = bug1,
+           silent.jags = TRUE,
+           data = data_1,
+           n.chains = 3,
+           adapt = 500,
+           burnin = burnin,
+           sample = 3000, #change this, something is making this take too long?
+           method = "parallel",
+           inits = inits,
+           modules = "glm",
+           monitor = c("cp", "a", "b", "tau") # keep samples for these variables
+          )
+
+cleanup.jags() # cleanup any failed runs  
+# #plot(rjo)    # summary plots
+```  
+
+
