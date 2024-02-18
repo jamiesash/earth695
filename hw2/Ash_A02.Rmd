@@ -142,6 +142,11 @@ The following figure shows a dart board S with subsets A and B and the impacts o
 **(b)** Generate 1,000 bootstrap replicates of `pts` and use them to obtain 95% confidence intervals for the probability estimates. **Hints:** To get the row numbers of `pts` for a bootstrap replicate, use `sample.int(Npt, size = Npt, replace = TRUE, prob = NULL)`. To get the confidence intervals, use `quantile()`. Use `hist()` to make histograms of the replicates and indicate confidence intervals by vertical red lines---use `abline()`---on the histograms. Put the histograms side by side in the same figure.  
 
 ```{r darts, cache=TRUE, fig.asp=0.7, out.width="85%", fig.cap="A dart board S with subsets A and B, showing the impacts of 1,000 darts. This figure replaces Figure 3.2.1 on page 32 of our text. I chose rectangular subsets in order to make the probability calculations a little easier. The PDF over the dart board is indicated by the colors, but you won't need it for your calculations; the samples are all you need."}
+SparseM
+gss
+mnormt
+fBasics
+
 library(fMultivar)
 op <- mypar(mar=c(3,3,2,2))
 x <- seq(from=-1, to=1, by=0.01)
